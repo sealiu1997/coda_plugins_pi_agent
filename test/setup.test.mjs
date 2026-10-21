@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findPi, PACKAGE } from "../agent/pi-command.mjs";
+import { findPi, managedPi, PACKAGE } from "../agent/pi-command.mjs";
 import { setup } from "../agent/setup.mjs";
 
 const home = "/home/me", state = "/state/pi-plugin", node = "/coda/node/bin/node";
@@ -16,6 +16,13 @@ test("Pi is the path set in Coda, else on the PATH, else in the usual places, el
   assert.equal(find({ "pi.commandPath": "pi" }, [join(home, ".local/bin/pi"), join(state, "pi/bin/pi")]), join(home, ".local/bin/pi"));
   assert.equal(find({}, [join(state, "pi/bin/pi")]), join(state, "pi/bin/pi"));
   assert.equal(find({}, []), "pi");
+});
+
+test("the plugin's own Pi is one path, the one the finder picks and setup installs over", () => {
+  const env = { PATH: "/usr/bin", CODA_PLUGIN_STATE: state }, own = join(state, "pi/bin/pi");
+  assert.equal(managedPi(env), own);
+  assert.equal(managedPi({}), null, "a backend without a plugin state has no Pi of its own");
+  assert.equal(findPi({}, { env, home, usable: path => path === own }), own);
 });
 
 test("a pi file on the PATH that cannot run is skipped", async t => {
@@ -85,16 +92,16 @@ test("a Pi found on the machine that fails --version is said, not installed over
 });
 
 test("the plugin's own Pi that fails --version is installed over", () => {
-  const managedPi = join(state, "pi/bin/pi");
+  const own = join(state, "pi/bin/pi");
   let repaired = false;
   const retry = machine({
-    [managedPi]: () => repaired ? { status: 0, stdout: "1.3.0\n" } : { status: 1 },
+    [own]: () => repaired ? { status: 0, stdout: "1.3.0\n" } : { status: 1 },
     [node]: () => { repaired = true; return { status: 0 }; },
   });
   const env = { CODA_PLUGIN_STATE: state, CODA_PLUGIN_SETTINGS: "{}", PATH: "/usr/bin" };
-  assert.equal(setup({ env, ...retry.options, find: () => managedPi }), 0);
-  assert.deepEqual(retry.ran, [[managedPi, "--version"],
+  assert.equal(setup({ env, ...retry.options, find: () => own }), 0);
+  assert.deepEqual(retry.ran, [[own, "--version"],
     [node, npm, "install", "--global", "--prefix", join(state, "pi"), "--no-fund", "--no-audit", "--no-update-notifier", PACKAGE],
-    [managedPi, "--version"]]);
-  assert.equal(retry.said.at(-1), `已安装 Pi 1.3.0：${managedPi}`);
+    [own, "--version"]]);
+  assert.equal(retry.said.at(-1), `已安装 Pi 1.3.0：${own}`);
 });
