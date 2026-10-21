@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findPi, PACKAGE } from "../agent/pi-command.mjs";
 import { setup } from "../agent/setup.mjs";
@@ -8,12 +10,25 @@ const home = "/home/me", state = "/state/pi-plugin", node = "/coda/node/bin/node
 const npm = "/coda/node/lib/node_modules/npm/bin/npm-cli.js";
 
 test("Pi is the path set in Coda, else on the PATH, else in the usual places, else the copy setup installed", () => {
-  const find = (settings, present) => findPi(settings, { env: { PATH: "/a:/b", CODA_PLUGIN_STATE: state }, home, exists: path => present.includes(path) });
+  const find = (settings, usable) => findPi(settings, { env: { PATH: "/a:/b", CODA_PLUGIN_STATE: state }, home, usable: path => usable.includes(path) });
   assert.equal(find({ "pi.commandPath": "/opt/pi" }, []), "/opt/pi");
-  assert.equal(find({}, ["/b/pi", join(home, ".local/bin/pi")]), "/b/pi");
+  assert.equal(find({}, ["/b/pi", join(home, ".local/bin/pi")]), "/b/pi", "a working pi later on the PATH is chosen over one that cannot run");
   assert.equal(find({ "pi.commandPath": "pi" }, [join(home, ".local/bin/pi"), join(state, "pi/bin/pi")]), join(home, ".local/bin/pi"));
   assert.equal(find({}, [join(state, "pi/bin/pi")]), join(state, "pi/bin/pi"));
   assert.equal(find({}, []), "pi");
+});
+
+test("a pi file on the PATH that cannot run is skipped", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-path-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const brokenDir = join(dir, "broken"), workingDir = join(dir, "working");
+  await mkdir(brokenDir);
+  await mkdir(workingDir);
+  const broken = join(brokenDir, "pi"), working = join(workingDir, "pi");
+  await writeFile(broken, "#!/bin/sh\n");
+  await writeFile(working, "#!/bin/sh\necho 1.2.3\n");
+  await chmod(working, 0o755);
+  assert.equal(findPi({}, { env: { PATH: `${brokenDir}:${workingDir}` }, home: dir }), working);
 });
 
 // A machine whose commands answer as `answers` says: by command, its exit status and output.
