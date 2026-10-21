@@ -74,3 +74,12 @@ test("a path set in Coda that does not run is said, not installed over; a failed
   assert.equal(setup({ env: {}, ...stateless.options, find: () => "pi" }), 1);
   assert.match(stateless.said.at(-1), /没有插件状态目录/);
 });
+
+test("a Pi found on the machine that fails --version is said, not installed over", () => {
+  const found = "/usr/local/bin/pi";
+  const broken = machine({ [found]: () => ({ status: 1 }) });
+  const env = { CODA_PLUGIN_STATE: state, CODA_PLUGIN_SETTINGS: "{}", PATH: "/usr/bin" };
+  assert.equal(setup({ env, ...broken.options, find: () => found }), 1);
+  assert.deepEqual(broken.ran, [[found, "--version"]], "the broken Pi blocks setup before npm is run");
+  assert.match(broken.said.at(-1), /^! 找到的 Pi \/usr\/local\/bin\/pi 运行不了/);
+});

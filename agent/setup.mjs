@@ -1,8 +1,8 @@
 // Coda's 「准备运行环境」 for Pi (Coda docs/plugins.md「准备运行环境」): Pi there to start, or installed. A Pi this machine
-// has of its own (the path set in Coda, the PATH, the usual install directories) is used as it is; with none, the latest
-// `@earendil-works/pi-coding-agent` is installed into this plugin's state with Coda's own Node and npm, where the agent
-// finds it (`agent/pi-command.mjs`). A path set in Coda that does not run is said, not installed over. Run again, it finds
-// what it installed and is done at once.
+// has of its own (the path set in Coda, the PATH, the usual install directories) is used as it is; only with none, the
+// latest `@earendil-works/pi-coding-agent` is installed into this plugin's state with Coda's own Node and npm, where the
+// agent finds it (`agent/pi-command.mjs`). A path set in Coda or found on this machine that does not run is said, not
+// installed over. Run again, it finds what it installed and is done at once.
 import { spawnSync } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
@@ -27,6 +27,7 @@ export function setup({ env = process.env, node = process.execPath, run = spawnS
   if (version) { say(`已有 Pi ${version}：${found}`); return 0; }
   const configured = settings['pi.commandPath'];
   if (configured && configured !== 'pi') { fail(`设置里的 Pi 路径 ${configured} 运行不了：改正它，或改回 pi 由插件安装`); return 1; }
+  if (found !== 'pi') { fail(`找到的 Pi ${found} 运行不了：删除、修好它，或设置 pi.commandPath 指向可用的 Pi`); return 1; }
   const prefix = managedPrefix(env), npm = join(dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
   if (!prefix) { fail(`这个后端没有插件状态目录，装不了 Pi：请自己安装 npm i -g ${PACKAGE}`); return 1; }
   if (!exists(npm)) { fail(`Coda 的 Node 没带 npm（${npm}），装不了 Pi：请自己安装 npm i -g ${PACKAGE}`); return 1; }
