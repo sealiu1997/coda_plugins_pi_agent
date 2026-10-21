@@ -83,3 +83,18 @@ test("a Pi found on the machine that fails --version is said, not installed over
   assert.deepEqual(broken.ran, [[found, "--version"]], "the broken Pi blocks setup before npm is run");
   assert.match(broken.said.at(-1), /^! 找到的 Pi \/usr\/local\/bin\/pi 运行不了/);
 });
+
+test("the plugin's own Pi that fails --version is installed over", () => {
+  const managedPi = join(state, "pi/bin/pi");
+  let repaired = false;
+  const retry = machine({
+    [managedPi]: () => repaired ? { status: 0, stdout: "1.3.0\n" } : { status: 1 },
+    [node]: () => { repaired = true; return { status: 0 }; },
+  });
+  const env = { CODA_PLUGIN_STATE: state, CODA_PLUGIN_SETTINGS: "{}", PATH: "/usr/bin" };
+  assert.equal(setup({ env, ...retry.options, find: () => managedPi }), 0);
+  assert.deepEqual(retry.ran, [[managedPi, "--version"],
+    [node, npm, "install", "--global", "--prefix", join(state, "pi"), "--no-fund", "--no-audit", "--no-update-notifier", PACKAGE],
+    [managedPi, "--version"]]);
+  assert.equal(retry.said.at(-1), `已安装 Pi 1.3.0：${managedPi}`);
+});

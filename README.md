@@ -21,7 +21,7 @@
 
 | 设置 | 默认值 | 说明 |
 | --- | --- | --- |
-| `pi.commandPath` | `pi` | `pi` 可执行文件路径；留为 `pi` 时依次检查 PATH、`~/.npm-global/bin`、`/opt/homebrew/bin`、`/usr/local/bin`、`~/.local/bin`、`~/.bun/bin`，最后是插件自己装的那份。填了路径却运行不了，或机器上找到的 `pi` 运行不了时，准备运行环境会报错并指出路径，不另装一份。 |
+| `pi.commandPath` | `pi` | `pi` 可执行文件路径；留为 `pi` 时依次检查 PATH、`~/.npm-global/bin`、`/opt/homebrew/bin`、`/usr/local/bin`、`~/.local/bin`、`~/.bun/bin`，最后是插件自己装的那份。填了路径却运行不了，或机器上找到的 `pi` 运行不了时，准备运行环境会报错并指出路径，不另装一份；插件状态目录里的那份坏了会重新安装。 |
 | `pi.extraArgs` | 空 | 追加到 `pi --mode rpc` 的额外 CLI 参数。 |
 | `pi.providers` | 无 | 一行一个 provider：地址、Key（密文）、协议、推理、上下文长度、最大输出。行名就是 Pi 里的 provider 名（不能带 `/`）。 |
 
