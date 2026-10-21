@@ -1,11 +1,11 @@
 // Pi Agent entry: speaks ACP to Coda on stdio, spawns `pi --mode rpc` as a child.
 import { randomUUID, createHash } from 'node:crypto';
-import { execSync } from 'node:child_process';
 import fs, { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname, isAbsolute, resolve, sep } from 'node:path';
-import { tmpdir, homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { readLines } from './lines.mjs';
 import { PiRpc } from './pi-rpc.mjs';
+import { findPi } from './pi-command.mjs';
 import { classifyPiFailure, isPiAuthError, getBase64DecodedSize } from './errors.mjs';
 
 const log = (...args) => process.stderr.write(`[pi-agent] ${args.join(' ')}\n`);
@@ -50,28 +50,8 @@ class SessionState {
   }
 }
 
-function getPiCommand() {
-  const configured = settings['pi.commandPath'];
-  if (configured && configured !== 'pi') return configured;
-  try {
-    const found = execSync('which pi', { encoding: 'utf8', timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-    if (found) return found;
-  } catch {}
-  const home = homedir();
-  const candidates = [
-    join(home, '.npm-global/bin/pi'),
-    '/opt/homebrew/bin/pi',
-    '/usr/local/bin/pi',
-    join(home, '.local/bin/pi'),
-    join(home, '.bun/bin/pi'),
-  ];
-  for (const p of candidates) {
-    if (existsSync(p)) return p;
-  }
-  return 'pi';
-}
-
-const piCommand = getPiCommand();
+// Where Pi is: a path set in Coda, the PATH, the usual directories, else the copy setup installed (agent/pi-command.mjs).
+const piCommand = findPi(settings);
 
 // ---- Model value encoding ----
 function modelValue(model) {
@@ -239,6 +219,8 @@ async function ensurePiRunning(session) {
 // ---- Spawn pi for a session ----
 async function spawnPi(session, systemPromptFile, extraArgs = []) {
   const args = ['--mode', 'rpc', '--session-id', session.sessionId, ...extraArgs];
+  // The providers set in Coda (`pi.providers`), registered by an extension that lists their models as Pi starts.
+  if (Object.keys(settings['pi.providers'] ?? {}).length) args.push('--extension', join(pluginPath, 'agent', 'providers.mjs'));
   if (systemPromptFile) {
     args.push('--append-system-prompt', systemPromptFile);
   }
