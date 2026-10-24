@@ -814,21 +814,28 @@ function writeSystemPrompt(sessionId, text) {
 }
 
 // ---- Coda MCP server file ----
+// One file per write, so a failed session/load of a session already open never removes the file that session's Pi
+// reads again on respawn. Every file written is removed when the agent exits, sessions still starting included.
+const mcpFiles = new Set();
 function writeMcpServers(sessionId, servers) {
   const dir = join(pluginState, 'mcp');
-  const file = join(dir, `${sessionId}.json`);
+  const file = join(dir, `${sessionId}-${randomUUID()}.json`);
   assertContained(file, dir);
   try { mkdirSync(dir, { recursive: true }); } catch {}
   writeFileSync(file, JSON.stringify(servers), { encoding: 'utf8', mode: 0o600 });
   chmodSync(file, 0o600);
+  mcpFiles.add(file);
   return file;
 }
 
-function cleanupSessionFiles(session) {
-  for (const file of [session.systemPromptFile, session.mcpConfigFile]) {
-    if (!file) continue;
-    try { fs.rmSync(file, { force: true }); } catch {}
-  }
+function removeMcpFile(file) {
+  if (!file) return;
+  try { fs.rmSync(file, { force: true }); } catch {}
+  mcpFiles.delete(file);
+}
+
+function removeMcpFiles() {
+  for (const file of [...mcpFiles]) removeMcpFile(file);
 }
 
 function validateSystemPrompt(systemPrompt) {
@@ -892,7 +899,7 @@ const methods = {
       try {
         await spawnPi(session, promptFile, [], session.mcpServers);
       } catch (e) {
-        cleanupSessionFiles(session);
+        removeMcpFile(session.mcpConfigFile);
         throw Object.assign(new Error(e.message), { code: e.code ?? -32603 });
       }
 
@@ -939,7 +946,7 @@ const methods = {
       try {
         await spawnPi(session, promptFile, [], session.mcpServers);
       } catch (e) {
-        cleanupSessionFiles(session);
+        removeMcpFile(session.mcpConfigFile);
         throw Object.assign(new Error(e.message), { code: e.code ?? -32603 });
       }
 
@@ -1435,8 +1442,8 @@ readLines(process.stdin).on('line', async line => {
       session.pi.close();
       session.pi.kill();
     }
-    cleanupSessionFiles(session);
   }
+  removeMcpFiles();
   process.exit(0);
 });
 
@@ -1447,8 +1454,8 @@ function shutdown() {
       session.pi.kill('SIGTERM');
       session.pi.kill('SIGKILL');
     }
-    cleanupSessionFiles(session);
   }
+  removeMcpFiles();
   process.exit(0);
 }
 process.on('SIGTERM', shutdown);
