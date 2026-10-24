@@ -1,11 +1,12 @@
 // Pi Agent entry: speaks ACP to Coda on stdio, spawns `pi --mode rpc` as a child.
 import { randomUUID, createHash } from 'node:crypto';
-import fs, { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import fs, { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, dirname, isAbsolute, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readLines } from './lines.mjs';
 import { PiRpc } from './pi-rpc.mjs';
-import { findPi } from './pi-command.mjs';
+import { findPi, piVersion } from './pi-command.mjs';
+import { buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue } from './config-options.mjs';
 import { classifyPiFailure, isPiAuthError, getBase64DecodedSize } from './errors.mjs';
 
 const log = (...args) => process.stderr.write(`[pi-agent] ${args.join(' ')}\n`);
@@ -44,6 +45,8 @@ class SessionState {
     this.currentThinkingLevel = null;
     this.chosenModelValue = null;
     this.chosenThinkingLevel = null;
+    this.defaultModelValue = null;
+    this.defaultThinkingLevel = null;
     this.commands = [];
     this.configOptions = [];
     this.elicitationSupported = false;
@@ -53,50 +56,9 @@ class SessionState {
 // Where Pi is: a path set in Coda, the PATH, the usual directories, else the copy setup installed (agent/pi-command.mjs).
 const piCommand = findPi(settings);
 
-// ---- Model value encoding ----
-function modelValue(model) {
-  return `${model.provider}/${model.id}`;
-}
-function parseModelValue(value) {
-  const slash = value.indexOf('/');
-  if (slash < 0) return { provider: value, modelId: value };
-  return { provider: value.slice(0, slash), modelId: value.slice(slash + 1) };
-}
-
-// ---- Build config options from pi state ----
-function buildConfigOptions(session) {
-  const opts = [];
-  // Model select
-  if (session.models.length > 0 && session.currentModelValue) {
-    opts.push({
-      id: 'model',
-      name: '模型',
-      type: 'select',
-      category: 'model',
-      currentValue: session.currentModelValue,
-      options: session.models.map(m => ({
-        value: modelValue(m),
-        name: m.name || m.id,
-      })),
-    });
-  }
-  // Thinking level select (only if model supports reasoning)
-  if (session.thinkingLevels.length > 1 || (session.thinkingLevels.length === 1 && session.thinkingLevels[0] !== 'off')) {
-    opts.push({
-      id: 'thinking',
-      name: '推理强度',
-      type: 'select',
-      category: 'thought_level',
-      currentValue: session.currentThinkingLevel ?? 'medium',
-      options: session.thinkingLevels.map(level => ({
-        value: level,
-        name: level,
-      })),
-    });
-  }
-  session.configOptions = opts;
-  return opts;
-}
+// The version of the Pi that will actually run, resolved and cached for the process; the plugin's own
+// package.json version stands in when the real one cannot be read.
+const getPiVersion = () => piVersion(piCommand, { fallback: () => readFileSync(join(pluginPath, 'package.json'), 'utf8').version });
 
 // ---- Build available commands ----
 function buildAvailableCommands(session) {
@@ -175,7 +137,8 @@ async function ensurePiRunning(session) {
         }
       }
 
-      if (session.chosenThinkingLevel && session.currentThinkingLevel !== session.chosenThinkingLevel) {
+      if (session.chosenThinkingLevel && !isDefaultSentinel(session.chosenThinkingLevel)
+          && session.currentThinkingLevel !== session.chosenThinkingLevel) {
         let reapplyFailed = false;
         let failError = null;
         try {
@@ -259,6 +222,8 @@ async function spawnPi(session, systemPromptFile, extraArgs = []) {
   });
   pi.spawn();
   session.pi = pi;
+  session.defaultModelValue = null;
+  session.defaultThinkingLevel = null;
 
   try {
   // Query initial state
@@ -266,8 +231,10 @@ async function spawnPi(session, systemPromptFile, extraArgs = []) {
     const state = await pi.send('get_state', {}, { timeout: 15000 });
     if (state.model) {
       session.currentModelValue = modelValue(state.model);
+      session.defaultModelValue = session.currentModelValue;
     }
     session.currentThinkingLevel = state.thinkingLevel ?? null;
+    session.defaultThinkingLevel = session.currentThinkingLevel;
   } catch (e) {
     log('get_state failed:', e.message);
   }
@@ -306,8 +273,10 @@ async function spawnPi(session, systemPromptFile, extraArgs = []) {
       const refreshedState = await pi.send('get_state', {}, { timeout: 15000 });
       if (refreshedState?.model) {
         session.currentModelValue = modelValue(refreshedState.model);
+        session.defaultModelValue = session.currentModelValue;
       }
       session.currentThinkingLevel = refreshedState?.thinkingLevel ?? null;
+      session.defaultThinkingLevel = session.currentThinkingLevel;
     } catch (e) {
       log('get_state refresh failed:', e.message);
     }
@@ -762,8 +731,9 @@ function validateSystemPrompt(systemPrompt) {
 
 // ---- ACP request handlers ----
 const methods = {
-  initialize: (params) => {
+  initialize: async (params) => {
     initParams = params;
+    const version = await getPiVersion();
     return {
       protocolVersion: 1,
       agentCapabilities: {
@@ -772,7 +742,7 @@ const methods = {
         sessionCapabilities: { systemPrompt: {} },
       },
       _meta: { steering: { supported: true } },
-      agentInfo: { name: 'Pi', version: '0.1.1' },
+      agentInfo: { name: 'Pi', version },
     };
   },
 
@@ -863,6 +833,21 @@ const methods = {
     const { configId, value } = params;
 
     if (configId === 'model') {
+      if (isDefaultSentinel(value)) {
+        if (session.defaultModelValue) {
+          const { provider, modelId } = parseModelValue(session.defaultModelValue);
+          await session.pi.send('set_model', { provider, modelId }, { timeout: 15000 });
+          session.currentModelValue = session.defaultModelValue;
+          try {
+            const levels = await session.pi.send('get_available_thinking_levels', {}, { timeout: 10000 });
+            session.thinkingLevels = levels?.levels ?? [];
+            const state = await session.pi.send('get_state', {}, { timeout: 10000 });
+            session.currentThinkingLevel = state.thinkingLevel ?? null;
+          } catch {}
+        }
+        session.chosenModelValue = null;
+        return { configOptions: buildConfigOptions(session) };
+      }
       const { provider, modelId } = parseModelValue(value);
       await session.pi.send('set_model', { provider, modelId }, { timeout: 15000 });
       session.chosenModelValue = value;
@@ -876,6 +861,14 @@ const methods = {
         session.currentThinkingLevel = state.thinkingLevel ?? null;
       } catch {}
     } else if (configId === 'thinking') {
+      if (isDefaultSentinel(value)) {
+        if (session.defaultThinkingLevel) {
+          await session.pi.send('set_thinking_level', { level: session.defaultThinkingLevel }, { timeout: 10000 });
+          session.currentThinkingLevel = session.defaultThinkingLevel;
+        }
+        session.chosenThinkingLevel = null;
+        return { configOptions: buildConfigOptions(session) };
+      }
       await session.pi.send('set_thinking_level', { level: value }, { timeout: 10000 });
       session.chosenThinkingLevel = value;
       session.currentThinkingLevel = value;
