@@ -2,11 +2,11 @@
 import { randomUUID, createHash } from 'node:crypto';
 import fs, { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, dirname, isAbsolute, resolve, sep } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { readLines } from './lines.mjs';
 import { PiRpc } from './pi-rpc.mjs';
 import { findPi, piVersion } from './pi-command.mjs';
-import { buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue } from './config-options.mjs';
+import { buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue, piDefaults } from './config-options.mjs';
 import { classifyPiFailure, isPiAuthError, getBase64DecodedSize } from './errors.mjs';
 
 const log = (...args) => process.stderr.write(`[pi-agent] ${args.join(' ')}\n`);
@@ -47,6 +47,7 @@ class SessionState {
     this.chosenThinkingLevel = null;
     this.defaultModelValue = null;
     this.defaultThinkingLevel = null;
+    this.sessionIsNew = false;
     this.commands = [];
     this.configOptions = [];
     this.elicitationSupported = false;
@@ -58,7 +59,23 @@ const piCommand = findPi(settings);
 
 // The version of the Pi that will actually run, resolved and cached for the process; the plugin's own
 // package.json version stands in when the real one cannot be read.
-const getPiVersion = () => piVersion(piCommand, { fallback: () => readFileSync(join(pluginPath, 'package.json'), 'utf8').version });
+const pluginVersion = () => {
+  try { return JSON.parse(readFileSync(join(pluginPath, 'package.json'), 'utf8')).version ?? 'unknown'; }
+  catch { return 'unknown'; }
+};
+const getPiVersion = () => piVersion(piCommand, { fallback: pluginVersion });
+
+// Pi's startup defaults for a cwd, from its agent-directory settings overridden by the project's `.pi`
+// settings: what「Pi 默认」should restore. The session's own state is only a fallback for sessions
+// created fresh, where Pi started with those defaults anyway.
+function piDefaultSettings(cwd) {
+  const agentDir = process.env.PI_CODING_AGENT_DIR || join(process.env.HOME || homedir(), '.pi', 'agent');
+  let user = {};
+  let project = {};
+  try { user = JSON.parse(readFileSync(join(agentDir, 'settings.json'), 'utf8')); } catch {}
+  try { project = JSON.parse(readFileSync(join(cwd, '.pi', 'settings.json'), 'utf8')); } catch {}
+  return piDefaults(user, project);
+}
 
 // ---- Build available commands ----
 function buildAvailableCommands(session) {
@@ -222,19 +239,28 @@ async function spawnPi(session, systemPromptFile, extraArgs = []) {
   });
   pi.spawn();
   session.pi = pi;
-  session.defaultModelValue = null;
-  session.defaultThinkingLevel = null;
 
   try {
   // Query initial state
+  const defaults = piDefaultSettings(session.cwd);
+  if (defaults.model) session.defaultModelValue = session.defaultModelValue ?? defaults.model;
+  if (defaults.thinkingLevel) session.defaultThinkingLevel = session.defaultThinkingLevel ?? defaults.thinkingLevel;
+  // A fresh session starts with Pi's own defaults; a loaded or respawned one restores the user's
+  // last choices, so only the former may seed the「Pi 默认」baseline from its state.
+  const seedBaseline = () => {
+    if (session.sessionIsNew && !session.defaultModelValue && session.currentModelValue) {
+      session.defaultModelValue = session.currentModelValue;
+      session.defaultThinkingLevel = session.currentThinkingLevel;
+      session.sessionIsNew = false;
+    }
+  };
   try {
     const state = await pi.send('get_state', {}, { timeout: 15000 });
     if (state.model) {
       session.currentModelValue = modelValue(state.model);
-      session.defaultModelValue = session.currentModelValue;
     }
     session.currentThinkingLevel = state.thinkingLevel ?? null;
-    session.defaultThinkingLevel = session.currentThinkingLevel;
+    seedBaseline();
   } catch (e) {
     log('get_state failed:', e.message);
   }
@@ -273,10 +299,9 @@ async function spawnPi(session, systemPromptFile, extraArgs = []) {
       const refreshedState = await pi.send('get_state', {}, { timeout: 15000 });
       if (refreshedState?.model) {
         session.currentModelValue = modelValue(refreshedState.model);
-        session.defaultModelValue = session.currentModelValue;
       }
       session.currentThinkingLevel = refreshedState?.thinkingLevel ?? null;
-      session.defaultThinkingLevel = session.currentThinkingLevel;
+      seedBaseline();
     } catch (e) {
       log('get_state refresh failed:', e.message);
     }
@@ -759,6 +784,7 @@ const methods = {
     try {
       const cwd = params.cwd || process.cwd();
       const session = new SessionState(sessionId, cwd);
+      session.sessionIsNew = true;
 
       // Check elicitation support
       session.elicitationSupported = !!initParams?.clientCapabilities?.elicitation?.form;
@@ -835,9 +861,15 @@ const methods = {
     if (configId === 'model') {
       if (isDefaultSentinel(value)) {
         if (session.defaultModelValue) {
-          const { provider, modelId } = parseModelValue(session.defaultModelValue);
-          await session.pi.send('set_model', { provider, modelId }, { timeout: 15000 });
-          session.currentModelValue = session.defaultModelValue;
+          try {
+            const { provider, modelId } = parseModelValue(session.defaultModelValue);
+            await session.pi.send('set_model', { provider, modelId }, { timeout: 15000 });
+            session.currentModelValue = session.defaultModelValue;
+          } catch (e) {
+            // Pi refused its own default (e.g. it is no longer an available model): keep the session
+            // as it is rather than failing the user's choice to go back to it.
+            log('Failed to restore Pi default model:', e.message);
+          }
           try {
             const levels = await session.pi.send('get_available_thinking_levels', {}, { timeout: 10000 });
             session.thinkingLevels = levels?.levels ?? [];
@@ -863,8 +895,12 @@ const methods = {
     } else if (configId === 'thinking') {
       if (isDefaultSentinel(value)) {
         if (session.defaultThinkingLevel) {
-          await session.pi.send('set_thinking_level', { level: session.defaultThinkingLevel }, { timeout: 10000 });
-          session.currentThinkingLevel = session.defaultThinkingLevel;
+          try {
+            await session.pi.send('set_thinking_level', { level: session.defaultThinkingLevel }, { timeout: 10000 });
+            session.currentThinkingLevel = session.defaultThinkingLevel;
+          } catch (e) {
+            log('Failed to restore Pi default thinking level:', e.message);
+          }
         }
         session.chosenThinkingLevel = null;
         return { configOptions: buildConfigOptions(session) };

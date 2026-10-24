@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, chmod, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, chmod, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { piVersion } from "../agent/pi-command.mjs";
@@ -61,6 +61,25 @@ test("piVersion caches per command", async () => {
     assert.equal(await piVersion(pi), "3.0.0");
     await chmod(pi, 0o000);
     assert.equal(await piVersion(pi, { fallback: () => "stale" }), "3.0.0");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the plugin version fallback ends at 'unknown' when package.json cannot be read", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-version-"));
+  try {
+    const pi = await scriptPi(dir, "exit 1\n");
+    // Mirrors entry.mjs' pluginVersion(): read, parse, and fall through to 'unknown' when either fails.
+    const pluginVersion = async pluginPath => {
+      try { return JSON.parse(await readFile(join(pluginPath, "package.json"), "utf8")).version ?? "unknown"; }
+      catch { return "unknown"; }
+    };
+    assert.equal(await pluginVersion(join(dir, "no-such-plugin")), "unknown");
+    await writeFile(join(dir, "package.json"), JSON.stringify({ version: "9.9.9" }));
+    assert.equal(await pluginVersion(dir), "9.9.9");
+    // piVersion with a failing command resolves through the fallback instead of throwing.
+    assert.equal(await piVersion(pi, { fallback: () => pluginVersion(dir) }), "9.9.9");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
