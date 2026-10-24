@@ -39,7 +39,15 @@
 ## 协议映射
 
 - `systemPrompt` 写入插件状态目录，并通过 `--append-system-prompt` 生效。
-- 模型与推理强度映射为 `configOptions`，并转成 Pi 的 `set_model` / `set_thinking_level`。
+- 模型与推理强度映射为 `configOptions`，并转成 Pi 的 `set_model` / `set_thinking_level`。两项各有一个「Pi 默认」（`_meta.coda.default`）：
+  取新会话第一次启动时 Pi 自己生效的模型与推理强度，按会话存在插件状态目录的 `defaults/`，重启 Pi、恢复会话后不变；推理强度的默认只在那个模型上提供。
+  此前建的会话没有这份记录，不提供「Pi 默认」。
+- `agentInfo.version` 报实际运行的 `pi --version`，读不到时报插件版本。
+- `mcpServers`（含 Coda 自己的 `coda` 服务器）转成 Pi 的 `mcp.json` 形式，由 `agent/coda-mcp.mjs` 扩展用 `pi.registerMcpServer` 注册、交 Pi 连接；
+  配置经插件状态目录里 0600 的文件传递，不进命令行参数与环境变量。`coda` 服务器的工具直接暴露给模型（`exposure: direct`），其余按 Pi 默认（codemode）。
+  `~/.pi/agent/mcp.json` 里有同名服务器时以它为准；不支持 SSE 服务器。
+- Pi 的上下文整理（`compaction_start` / `compaction_end` / 摘要重试）映射为 `compaction_update`，失败带原因；Coda 未声明 `session.compaction` 时，失败改为在回复里提示。
+- 每轮结束和恢复会话后，用 Pi 的 `get_session_stats` 发 `usage_update`（上下文已用 / 总量、累计费用，按 USD）；刚整理完、Pi 暂无用量时不发。
 - 文本、图片与资源输入转成 Pi `prompt`；输出按 `agent_settled` 结束一轮。
 - 工具执行、思考流、会话标题与可用命令映射为 `session/update`。
 - `_session/steering` 映射为 Pi `steer`；空闲时返回 `promptRequired`。
