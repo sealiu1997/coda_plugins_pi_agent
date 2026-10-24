@@ -9,6 +9,7 @@ import { findPi, piVersion } from './pi-command.mjs';
 import { buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue } from './config-options.mjs';
 import { readSessionDefaults, writeSessionDefaults } from './session-defaults.mjs';
 import { classifyPiFailure, isPiAuthError, getBase64DecodedSize } from './errors.mjs';
+import { handleCompactionEvent } from './compaction.mjs';
 
 const log = (...args) => process.stderr.write(`[pi-agent] ${args.join(' ')}\n`);
 
@@ -52,6 +53,8 @@ class SessionState {
     this.commands = [];
     this.configOptions = [];
     this.elicitationSupported = false;
+    this.compactionSupported = false;
+    this.compactionId = null;
   }
 }
 
@@ -343,6 +346,27 @@ async function spawnPi(session, systemPromptFile, extraArgs = []) {
 
 // ---- Handle pi events ----
 function handlePiEvent(session, record) {
+  // Compaction is session-scoped and may start or end between turns, before
+  // the turn guard below, and must not be silenced by a cancelled turn.
+  if (['compaction_start', 'compaction_end', 'summarization_retry_scheduled', 'summarization_retry_attempt_start'].includes(record.type)) {
+    const update = handleCompactionEvent(session, record);
+    if (update) {
+      notify('session/update', {
+        sessionId: session.sessionId,
+        update: { sessionUpdate: 'compaction_update', ...update },
+      });
+    }
+    if (session.compactionSupported || record.type !== 'compaction_end') return;
+    // Clients without compaction support: never let a failure pass silently.
+    if (update?.status === 'failed' && session.turn && !session.turn.cancelled) {
+      notify('session/update', {
+        sessionId: session.sessionId,
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `（上下文整理失败：${update.error}）` } },
+      });
+    }
+    return;
+  }
+
   // Session-level events (occur whether or not a turn is active)
   if (record.type === 'session_info_changed') {
     notify('session/update', {
@@ -721,6 +745,14 @@ function handlePiExit(session, pi, code, signal) {
   if (session.pi !== pi) return;
   session.pi = null;
   clearPendingExtUI(session);
+  if (session.compactionSupported && session.compactionId) {
+    const compactionId = session.compactionId;
+    session.compactionId = null;
+    notify('session/update', {
+      sessionId: session.sessionId,
+      update: { sessionUpdate: 'compaction_update', compactionId, status: 'failed', error: 'Pi 进程已退出' },
+    });
+  }
   if (session.turn) {
     const turn = session.turn;
     session.turn = null;
@@ -788,6 +820,7 @@ const methods = {
 
       // Check elicitation support
       session.elicitationSupported = !!initParams?.clientCapabilities?.elicitation?.form;
+      session.compactionSupported = initParams?.clientCapabilities?.session?.compaction != null;
 
       // Write system prompt
       let promptFile = null;
@@ -830,6 +863,7 @@ const methods = {
       const cwd = params.cwd || process.cwd();
       const session = new SessionState(sessionId, cwd);
       session.elicitationSupported = !!initParams?.clientCapabilities?.elicitation?.form;
+      session.compactionSupported = initParams?.clientCapabilities?.session?.compaction != null;
 
       let promptFile = null;
       if (text) {
