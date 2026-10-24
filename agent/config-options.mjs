@@ -15,8 +15,14 @@ export function parseModelValue(value) {
 export const DEFAULT_OPTION = { value: 'default', name: 'Pi 默认', _meta: { coda: { default: true } } };
 export const isDefaultSentinel = value => value === DEFAULT_OPTION.value;
 
+// Pi has no approval modes, but Coda keeps a session's agent, model and effort as a shortcut for the next new session
+// only when it has a mode; without one every new Pi session starts with its effort unchosen. One fixed mode gives it one.
+export const PI_MODE = 'pi';
+export const MODE_OPTION = { id: 'mode', name: '工作模式', type: 'select', category: 'mode', currentValue: PI_MODE,
+  options: [{ value: PI_MODE, name: '默认' }] };
+
 export function buildConfigOptions(session) {
-  const opts = [];
+  const opts = [{ ...MODE_OPTION, options: MODE_OPTION.options.map(o => ({ ...o })) }];
   // Model select
   if (session.models.length > 0 && session.currentModelValue) {
     const options = [

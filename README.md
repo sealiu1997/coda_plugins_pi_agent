@@ -43,6 +43,7 @@
   取新会话第一次启动时 Pi 自己生效的模型与推理强度，按会话存在插件状态目录的 `defaults/`，重启 Pi、恢复会话后不变；推理强度的默认只在那个模型上提供。
   此前建的会话没有这份记录，不提供「Pi 默认」。
 - `agentInfo.version` 报实际运行的 `pi --version`，读不到时报插件版本。
+- 报一个固定的「工作模式」（`mode`，只有「默认」一项）：Pi 没有审批模式，但 Coda 只把带模式的会话记成新会话的快捷方式，没有它，新开的 Pi 会话推理强度总是没选、只显示图标。
 - `mcpServers`（含 Coda 自己的 `coda` 服务器）转成 Pi 的 `mcp.json` 形式，由 `agent/coda-mcp.mjs` 扩展用 `pi.registerMcpServer` 注册、交 Pi 连接；
   配置经插件状态目录里 0600 的文件传递，不进命令行参数与环境变量；`env` 与 `headers` 的值按 Pi 的字面量写法转义（`$` 写成 `$$`，开头的 `!` 写成 `$!`），Pi 不会把它们当命令执行或展开变量。`coda` 服务器的工具直接暴露给模型（`exposure: direct`），其余按 Pi 默认（codemode）。
   `~/.pi/agent/mcp.json` 里有同名服务器时以它为准；不支持 SSE 服务器。
