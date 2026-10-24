@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue, piDefaults, DEFAULT_OPTION } from "../agent/config-options.mjs";
+import { buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue, DEFAULT_OPTION } from "../agent/config-options.mjs";
 
 const session = (overrides = {}) => ({
   models: [{ provider: "anthropic", id: "claude-x", name: "Claude X" }],
@@ -10,34 +10,6 @@ const session = (overrides = {}) => ({
   defaultModelValue: "anthropic/claude-x",
   defaultThinkingLevel: "medium",
   ...overrides,
-});
-
-test("piDefaults reads Pi's startup model and thinking level", () => {
-  assert.deepEqual(
-    piDefaults({ defaultProvider: "anthropic", defaultModel: "claude-x", defaultThinkingLevel: "high" }),
-    { model: "anthropic/claude-x", thinkingLevel: "high" },
-  );
-});
-
-test("piDefaults prefers the per-model startup thinking level", () => {
-  const user = {
-    defaultProvider: "anthropic",
-    defaultModel: "claude-x",
-    defaultThinkingLevel: "high",
-    modelThinkingLevels: { "anthropic/claude-x": "low" },
-  };
-  assert.deepEqual(piDefaults(user), { model: "anthropic/claude-x", thinkingLevel: "low" });
-});
-
-test("project settings override the agent directory", () => {
-  const user = { defaultProvider: "anthropic", defaultModel: "claude-x", defaultThinkingLevel: "high" };
-  const project = { defaultProvider: "openai", defaultModel: "gpt-y" };
-  assert.deepEqual(piDefaults(user, project), { model: "openai/gpt-y", thinkingLevel: "high" });
-});
-
-test("piDefaults gives nothing when Pi has no explicit defaults", () => {
-  assert.deepEqual(piDefaults({}), { model: null, thinkingLevel: null });
-  assert.deepEqual(piDefaults({ defaultModel: "claude-x" }), { model: null, thinkingLevel: null });
 });
 
 test("model value encodes a model and parses back", () => {
@@ -81,7 +53,23 @@ test("the sentinel choice only appears when the baseline is known", () => {
   assert.deepEqual(opts.find(o => o.id === "thinking").options.map(o => o.value), ["off", "medium", "high"]);
 });
 
-test("currentValue falls back into the option list", () => {
+test("a current model outside the list is appended as its own choice", () => {
   const opts = buildConfigOptions(session({ currentModelValue: "gone/removed-model" }));
-  assert.equal(opts.find(o => o.id === "model").currentValue, "default");
+  const model = opts.find(o => o.id === "model");
+  assert.equal(model.currentValue, "gone/removed-model");
+  assert.deepEqual(model.options.find(o => o.value === "gone/removed-model"), { value: "gone/removed-model", name: "gone/removed-model" });
+  assert.deepEqual(model.options[0], DEFAULT_OPTION);
+});
+
+test("a current thinking level outside the list is appended too", () => {
+  const opts = buildConfigOptions(session({ currentThinkingLevel: "xhigh" }));
+  const thinking = opts.find(o => o.id === "thinking");
+  assert.equal(thinking.currentValue, "xhigh");
+  assert.ok(thinking.options.some(o => o.value === "xhigh" && o.name === "xhigh"));
+});
+
+test("a model-only baseline still offers the sentinel for thinking when the level is known", () => {
+  const opts = buildConfigOptions(session({ defaultThinkingLevel: null }));
+  assert.ok(opts.find(o => o.id === "model").options[0]._meta.coda.default);
+  assert.deepEqual(opts.find(o => o.id === "thinking").options.map(o => o.value), ["off", "medium", "high"]);
 });
