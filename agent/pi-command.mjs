@@ -1,7 +1,9 @@
 // Where Pi is on this machine, as the agent starts it and as its setup looks for it: the path set in Coda
 // (`pi.commandPath`), else the PATH, else the usual install directories, else the copy this plugin's setup installed in
 // its own state (`agent/setup.mjs`). A Pi the machine has of its own is always taken before that copy.
+import { execFile } from 'node:child_process';
 import { accessSync, constants, statSync } from 'node:fs';
+import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
@@ -34,4 +36,22 @@ export function findPi(settings, { env = process.env, home = homedir(), usable =
   const own = managedPi(env);
   return [join(home, '.npm-global/bin/pi'), '/opt/homebrew/bin/pi', '/usr/local/bin/pi', join(home, '.local/bin/pi'), join(home, '.bun/bin/pi'),
     ...(own ? [own] : [])].find(usable) ?? 'pi';
+}
+
+const runFile = promisify(execFile);
+
+// The version a Pi reports (`pi --version` prints e.g. 1.1.0), cached per command. `fallback` stands in
+// (its result is not cached) when the binary cannot be run, so callers never wait or throw on this.
+const versionCache = new Map();
+export async function piVersion(piCommand, { timeout = 5000, fallback = null } = {}) {
+  if (!versionCache.has(piCommand)) {
+    try {
+      const { stdout } = await runFile(piCommand, ['--version'], { timeout });
+      versionCache.set(piCommand, stdout.trim().match(/[\d][\w.+-]*/)?.[0] ?? null);
+    } catch (e) {
+      process.stderr.write(`[pi-agent] pi --version failed: ${e.message}\n`);
+      versionCache.set(piCommand, null);
+    }
+  }
+  return versionCache.get(piCommand) ?? (fallback ? await fallback() : null);
 }

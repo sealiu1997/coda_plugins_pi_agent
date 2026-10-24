@@ -1,12 +1,17 @@
 // Pi Agent entry: speaks ACP to Coda on stdio, spawns `pi --mode rpc` as a child.
 import { randomUUID, createHash } from 'node:crypto';
-import fs, { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import fs, { existsSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from 'node:fs';
 import { join, dirname, isAbsolute, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readLines } from './lines.mjs';
 import { PiRpc } from './pi-rpc.mjs';
-import { findPi } from './pi-command.mjs';
+import { findPi, piVersion } from './pi-command.mjs';
+import { buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue } from './config-options.mjs';
+import { readSessionDefaults, writeSessionDefaults } from './session-defaults.mjs';
 import { classifyPiFailure, isPiAuthError, getBase64DecodedSize } from './errors.mjs';
+import { handleCompactionEvent } from './compaction.mjs';
+import { usageUpdateFromStats } from './usage.mjs';
+import { convertCodaMcpServers } from './coda-mcp.mjs';
 
 const log = (...args) => process.stderr.write(`[pi-agent] ${args.join(' ')}\n`);
 
@@ -35,6 +40,8 @@ class SessionState {
     this.cwd = cwd;
     this.pi = null;
     this.systemPromptFile = null;
+    this.mcpServers = {};
+    this.mcpConfigFile = null;
     this.extraArgs = [];
     this.ensuring = null;
     this.turn = null; // { resolve, reject, updates, text, cancelled, steered }
@@ -44,59 +51,28 @@ class SessionState {
     this.currentThinkingLevel = null;
     this.chosenModelValue = null;
     this.chosenThinkingLevel = null;
+    this.defaultModelValue = null;
+    this.defaultThinkingLevel = null;
+    this.sessionIsNew = false;
     this.commands = [];
     this.configOptions = [];
     this.elicitationSupported = false;
+    this.compactionSupported = false;
+    this.compactionId = null;
+  this.usageInFlight = false;
   }
 }
 
 // Where Pi is: a path set in Coda, the PATH, the usual directories, else the copy setup installed (agent/pi-command.mjs).
 const piCommand = findPi(settings);
 
-// ---- Model value encoding ----
-function modelValue(model) {
-  return `${model.provider}/${model.id}`;
-}
-function parseModelValue(value) {
-  const slash = value.indexOf('/');
-  if (slash < 0) return { provider: value, modelId: value };
-  return { provider: value.slice(0, slash), modelId: value.slice(slash + 1) };
-}
-
-// ---- Build config options from pi state ----
-function buildConfigOptions(session) {
-  const opts = [];
-  // Model select
-  if (session.models.length > 0 && session.currentModelValue) {
-    opts.push({
-      id: 'model',
-      name: '模型',
-      type: 'select',
-      category: 'model',
-      currentValue: session.currentModelValue,
-      options: session.models.map(m => ({
-        value: modelValue(m),
-        name: m.name || m.id,
-      })),
-    });
-  }
-  // Thinking level select (only if model supports reasoning)
-  if (session.thinkingLevels.length > 1 || (session.thinkingLevels.length === 1 && session.thinkingLevels[0] !== 'off')) {
-    opts.push({
-      id: 'thinking',
-      name: '推理强度',
-      type: 'select',
-      category: 'thought_level',
-      currentValue: session.currentThinkingLevel ?? 'medium',
-      options: session.thinkingLevels.map(level => ({
-        value: level,
-        name: level,
-      })),
-    });
-  }
-  session.configOptions = opts;
-  return opts;
-}
+// The version of the Pi that will actually run, resolved and cached for the process; the plugin's own
+// package.json version stands in when the real one cannot be read.
+const pluginVersion = () => {
+  try { return JSON.parse(readFileSync(join(pluginPath, 'package.json'), 'utf8')).version ?? 'unknown'; }
+  catch { return 'unknown'; }
+};
+const getPiVersion = () => piVersion(piCommand, { fallback: pluginVersion });
 
 // ---- Build available commands ----
 function buildAvailableCommands(session) {
@@ -104,6 +80,15 @@ function buildAvailableCommands(session) {
     name: cmd.name,
     description: cmd.description || '',
   })).filter(cmd => cmd.name);
+}
+
+// Pull the truth back from Pi after a failed switch, so the options we report match what it runs.
+async function resyncSessionState(session) {
+  const levels = await session.pi.send('get_available_thinking_levels', {}, { timeout: 10000 });
+  session.thinkingLevels = levels?.levels ?? [];
+  const state = await session.pi.send('get_state', {}, { timeout: 10000 });
+  session.currentModelValue = state.model ? modelValue(state.model) : session.currentModelValue;
+  session.currentThinkingLevel = state.thinkingLevel ?? null;
 }
 
 function notifyAvailableCommands(session) {
@@ -115,6 +100,29 @@ function notifyAvailableCommands(session) {
       update: { sessionUpdate: 'available_commands_update', availableCommands: commands },
     });
   });
+}
+
+// Fire-and-forget: never throws, never blocks the caller, never overlaps per session.
+function reportUsage(session) {
+  const pi = session?.pi;
+  if (!pi || pi.exited || !pi.ready || session.usageInFlight) return;
+  session.usageInFlight = true;
+  (async () => {
+    try {
+      const stats = await pi.send('get_session_stats', {}, { timeout: 5000 });
+      if (session.pi !== pi || pi.exited) return;
+      const update = usageUpdateFromStats(stats);
+      if (update) {
+        notify('session/update', {
+          sessionId: session.sessionId,
+          update,
+        });
+      }
+    } catch {}
+    finally {
+      session.usageInFlight = false;
+    }
+  })();
 }
 
 function assertContained(targetPath, baseDir) {
@@ -133,7 +141,7 @@ async function ensurePiRunning(session) {
   if (session.pi && !session.pi.exited && session.pi.ready) return;
   session.ensuring = (async () => {
     try {
-      await spawnPi(session, session.systemPromptFile, session.extraArgs);
+      await spawnPi(session, session.systemPromptFile, session.extraArgs, session.mcpServers);
       session.pi.ready = false;
 
       if (session.chosenModelValue && session.currentModelValue !== session.chosenModelValue) {
@@ -175,7 +183,8 @@ async function ensurePiRunning(session) {
         }
       }
 
-      if (session.chosenThinkingLevel && session.currentThinkingLevel !== session.chosenThinkingLevel) {
+      if (session.chosenThinkingLevel && !isDefaultSentinel(session.chosenThinkingLevel)
+          && session.currentThinkingLevel !== session.chosenThinkingLevel) {
         let reapplyFailed = false;
         let failError = null;
         try {
@@ -217,10 +226,13 @@ async function ensurePiRunning(session) {
 }
 
 // ---- Spawn pi for a session ----
-async function spawnPi(session, systemPromptFile, extraArgs = []) {
+async function spawnPi(session, systemPromptFile, extraArgs = [], mcpServers = {}) {
   const args = ['--mode', 'rpc', '--session-id', session.sessionId, ...extraArgs];
   // The providers set in Coda (`pi.providers`), registered by an extension that lists their models as Pi starts.
   if (Object.keys(settings['pi.providers'] ?? {}).length) args.push('--extension', join(pluginPath, 'agent', 'providers.mjs'));
+  if (Object.keys(mcpServers).length) {
+    args.push('--extension', join(pluginPath, 'agent', 'coda-mcp.mjs'));
+  }
   if (systemPromptFile) {
     args.push('--append-system-prompt', systemPromptFile);
   }
@@ -247,6 +259,8 @@ async function spawnPi(session, systemPromptFile, extraArgs = []) {
     pathVal = `${nodeDir}:${pathVal}`;
   }
   env.PATH = pathVal;
+  // Only the path crosses the process boundary; server arguments and secrets stay in the 0600 file.
+  if (session.mcpConfigFile) env.PI_CODA_MCP_FILE = session.mcpConfigFile;
 
   const pi = new PiRpc({
     piCommand,
@@ -262,12 +276,28 @@ async function spawnPi(session, systemPromptFile, extraArgs = []) {
 
   try {
   // Query initial state
+  // The「Pi 默认」baseline: Pi's effective state at the session's very first spawn, before any
+  // chosen replay. Once set (memory or file) it is never overwritten.
+  if (!session.defaultModelValue && !session.defaultThinkingLevel) {
+    const stored = pluginState ? readSessionDefaults(pluginState, session.sessionId) : null;
+    if (stored) {
+      session.defaultModelValue = stored.model;
+      session.defaultThinkingLevel = stored.thinkingLevel;
+    }
+  }
   try {
     const state = await pi.send('get_state', {}, { timeout: 15000 });
     if (state.model) {
       session.currentModelValue = modelValue(state.model);
     }
     session.currentThinkingLevel = state.thinkingLevel ?? null;
+    if (session.sessionIsNew && !session.defaultModelValue && !session.defaultThinkingLevel
+        && (state.model || state.thinkingLevel)) {
+      session.defaultModelValue = session.currentModelValue;
+      session.defaultThinkingLevel = session.currentThinkingLevel;
+      session.sessionIsNew = false;
+      if (pluginState) writeSessionDefaults(pluginState, session.sessionId, { model: session.defaultModelValue, thinkingLevel: session.defaultThinkingLevel });
+    }
   } catch (e) {
     log('get_state failed:', e.message);
   }
@@ -349,6 +379,28 @@ async function spawnPi(session, systemPromptFile, extraArgs = []) {
 
 // ---- Handle pi events ----
 function handlePiEvent(session, record) {
+  // Compaction is session-scoped and may start or end between turns, before
+  // the turn guard below, and must not be silenced by a cancelled turn.
+  if (['compaction_start', 'compaction_end', 'summarization_retry_scheduled', 'summarization_retry_attempt_start'].includes(record.type)) {
+    const update = handleCompactionEvent(session, record);
+    // ACP: only clients advertising session.compaction may receive updates.
+    if (update && session.compactionSupported) {
+      notify('session/update', {
+        sessionId: session.sessionId,
+        update: { sessionUpdate: 'compaction_update', ...update },
+      });
+    }
+    if (session.compactionSupported || record.type !== 'compaction_end') return;
+    // Clients without compaction support: never let a failure pass silently.
+    if (update?.status === 'failed' && session.turn && !session.turn.cancelled) {
+      notify('session/update', {
+        sessionId: session.sessionId,
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `（上下文整理失败：${update.error}）` } },
+      });
+    }
+    return;
+  }
+
   // Session-level events (occur whether or not a turn is active)
   if (record.type === 'session_info_changed') {
     notify('session/update', {
@@ -509,10 +561,12 @@ function finishTurn(session, targetTurn) {
       ...(failure ? { data: { _meta: { coda: { failure } } } } : {}),
     };
     turn.reject?.(err);
-    return;
+  } else {
+    turn.resolve?.({ stopReason });
   }
-
-  turn.resolve?.({ stopReason });
+  // The prompt response is on its way to Coda; refresh the meter out of band. A turn that failed late still cost what
+  // its earlier model calls and tools did, so it is reported too.
+  reportUsage(session);
 }
 
 // ---- Tool kind mapping ----
@@ -727,6 +781,14 @@ function handlePiExit(session, pi, code, signal) {
   if (session.pi !== pi) return;
   session.pi = null;
   clearPendingExtUI(session);
+  if (session.compactionSupported && session.compactionId) {
+    const compactionId = session.compactionId;
+    session.compactionId = null;
+    notify('session/update', {
+      sessionId: session.sessionId,
+      update: { sessionUpdate: 'compaction_update', compactionId, status: 'failed', error: 'Pi 进程已退出' },
+    });
+  }
   if (session.turn) {
     const turn = session.turn;
     session.turn = null;
@@ -751,6 +813,31 @@ function writeSystemPrompt(sessionId, text) {
   return file;
 }
 
+// ---- Coda MCP server file ----
+// One file per write, so a failed session/load of a session already open never removes the file that session's Pi
+// reads again on respawn. Every file written is removed when the agent exits, sessions still starting included.
+const mcpFiles = new Set();
+function writeMcpServers(sessionId, servers) {
+  const dir = join(pluginState, 'mcp');
+  const file = join(dir, `${sessionId}-${randomUUID()}.json`);
+  assertContained(file, dir);
+  try { mkdirSync(dir, { recursive: true }); } catch {}
+  writeFileSync(file, JSON.stringify(servers), { encoding: 'utf8', mode: 0o600 });
+  chmodSync(file, 0o600);
+  mcpFiles.add(file);
+  return file;
+}
+
+function removeMcpFile(file) {
+  if (!file) return;
+  try { fs.rmSync(file, { force: true }); } catch {}
+  mcpFiles.delete(file);
+}
+
+function removeMcpFiles() {
+  for (const file of [...mcpFiles]) removeMcpFile(file);
+}
+
 function validateSystemPrompt(systemPrompt) {
   if (systemPrompt === undefined || systemPrompt === null) return '';
   if (systemPrompt.mode !== 'append' || !Array.isArray(systemPrompt.content)
@@ -762,8 +849,9 @@ function validateSystemPrompt(systemPrompt) {
 
 // ---- ACP request handlers ----
 const methods = {
-  initialize: (params) => {
+  initialize: async (params) => {
     initParams = params;
+    const version = await getPiVersion();
     return {
       protocolVersion: 1,
       agentCapabilities: {
@@ -772,7 +860,7 @@ const methods = {
         sessionCapabilities: { systemPrompt: {} },
       },
       _meta: { steering: { supported: true } },
-      agentInfo: { name: 'Pi', version: '0.1.1' },
+      agentInfo: { name: 'Pi', version },
     };
   },
 
@@ -789,9 +877,11 @@ const methods = {
     try {
       const cwd = params.cwd || process.cwd();
       const session = new SessionState(sessionId, cwd);
+      session.sessionIsNew = true;
 
       // Check elicitation support
       session.elicitationSupported = !!initParams?.clientCapabilities?.elicitation?.form;
+      session.compactionSupported = initParams?.clientCapabilities?.session?.compaction != null;
 
       // Write system prompt
       let promptFile = null;
@@ -800,11 +890,16 @@ const methods = {
       }
 
       session.systemPromptFile = promptFile;
+      session.mcpServers = convertCodaMcpServers(params.mcpServers);
+      if (Object.keys(session.mcpServers).length) {
+        session.mcpConfigFile = writeMcpServers(sessionId, session.mcpServers);
+      }
       session.extraArgs = [];
 
       try {
-        await spawnPi(session, promptFile);
+        await spawnPi(session, promptFile, [], session.mcpServers);
       } catch (e) {
+        removeMcpFile(session.mcpConfigFile);
         throw Object.assign(new Error(e.message), { code: e.code ?? -32603 });
       }
 
@@ -834,6 +929,7 @@ const methods = {
       const cwd = params.cwd || process.cwd();
       const session = new SessionState(sessionId, cwd);
       session.elicitationSupported = !!initParams?.clientCapabilities?.elicitation?.form;
+      session.compactionSupported = initParams?.clientCapabilities?.session?.compaction != null;
 
       let promptFile = null;
       if (text) {
@@ -841,16 +937,22 @@ const methods = {
       }
 
       session.systemPromptFile = promptFile;
+      session.mcpServers = convertCodaMcpServers(params.mcpServers);
+      if (Object.keys(session.mcpServers).length) {
+        session.mcpConfigFile = writeMcpServers(sessionId, session.mcpServers);
+      }
       session.extraArgs = [];
 
       try {
-        await spawnPi(session, promptFile);
+        await spawnPi(session, promptFile, [], session.mcpServers);
       } catch (e) {
+        removeMcpFile(session.mcpConfigFile);
         throw Object.assign(new Error(e.message), { code: e.code ?? -32603 });
       }
 
       sessions.set(sessionId, session);
 
+      setImmediate(() => reportUsage(session));
       return { configOptions: session.configOptions };
     } finally {
       loadingSessions.delete(sessionId);
@@ -863,6 +965,24 @@ const methods = {
     const { configId, value } = params;
 
     if (configId === 'model') {
+      if (isDefaultSentinel(value)) {
+        if (session.defaultModelValue) {
+          try {
+            const { provider, modelId } = parseModelValue(session.defaultModelValue);
+            await session.pi.send('set_model', { provider, modelId }, { timeout: 15000 });
+            session.currentModelValue = session.defaultModelValue;
+          } catch (e) {
+            // Pi refused its own default (e.g. it is no longer an available model): resync from its
+            // real state and fail the request rather than report a switch that did not happen.
+            log('Failed to restore Pi default model:', e.message);
+            await resyncSessionState(session);
+            throw Object.assign(new Error(`恢复 Pi 默认模型失败：${e.message}`), { code: -32603 });
+          }
+          await resyncSessionState(session);
+        }
+        session.chosenModelValue = null;
+        return { configOptions: buildConfigOptions(session) };
+      }
       const { provider, modelId } = parseModelValue(value);
       await session.pi.send('set_model', { provider, modelId }, { timeout: 15000 });
       session.chosenModelValue = value;
@@ -876,6 +996,24 @@ const methods = {
         session.currentThinkingLevel = state.thinkingLevel ?? null;
       } catch {}
     } else if (configId === 'thinking') {
+      if (isDefaultSentinel(value)) {
+        // The stored level belongs to the baseline model; elsewhere Pi applies its own default.
+        const onBaselineModel = session.currentModelValue === session.defaultModelValue;
+        if (session.defaultThinkingLevel && onBaselineModel) {
+          try {
+            await session.pi.send('set_thinking_level', { level: session.defaultThinkingLevel }, { timeout: 10000 });
+            session.currentThinkingLevel = session.defaultThinkingLevel;
+          } catch (e) {
+            log('Failed to restore Pi default thinking level:', e.message);
+            await resyncSessionState(session);
+            throw Object.assign(new Error(`恢复 Pi 默认推理强度失败：${e.message}`), { code: -32603 });
+          }
+          await resyncSessionState(session);
+        }
+        session.chosenThinkingLevel = null;
+        // Off the baseline model, Pi's default for that model is already running: nothing to change.
+        return { configOptions: buildConfigOptions(session) };
+      }
       await session.pi.send('set_thinking_level', { level: value }, { timeout: 10000 });
       session.chosenThinkingLevel = value;
       session.currentThinkingLevel = value;
@@ -1305,6 +1443,7 @@ readLines(process.stdin).on('line', async line => {
       session.pi.kill();
     }
   }
+  removeMcpFiles();
   process.exit(0);
 });
 
@@ -1316,6 +1455,7 @@ function shutdown() {
       session.pi.kill('SIGKILL');
     }
   }
+  removeMcpFiles();
   process.exit(0);
 }
 process.on('SIGTERM', shutdown);
