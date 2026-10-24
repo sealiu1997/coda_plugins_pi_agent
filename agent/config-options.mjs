@@ -42,8 +42,10 @@ export function buildConfigOptions(session) {
   }
   // Thinking level select (only if model supports reasoning)
   if (session.thinkingLevels.length > 1 || (session.thinkingLevels.length === 1 && session.thinkingLevels[0] !== 'off')) {
+    // The stored thinking level belongs to the baseline model; another model has its own default.
+    const onBaselineModel = !session.defaultModelValue || session.currentModelValue === session.defaultModelValue;
     const options = [
-      ...(session.defaultThinkingLevel ? [{ ...DEFAULT_OPTION }] : []),
+      ...(session.defaultThinkingLevel && onBaselineModel ? [{ ...DEFAULT_OPTION }] : []),
       ...session.thinkingLevels.map(level => ({
         value: level,
         name: level,

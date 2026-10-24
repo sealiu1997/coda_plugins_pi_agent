@@ -73,3 +73,11 @@ test("a model-only baseline still offers the sentinel for thinking when the leve
   assert.ok(opts.find(o => o.id === "model").options[0]._meta.coda.default);
   assert.deepEqual(opts.find(o => o.id === "thinking").options.map(o => o.value), ["off", "medium", "high"]);
 });
+
+test("the thinking sentinel only shows on the baseline model", () => {
+  const opts = buildConfigOptions(session({ currentModelValue: "openai/gpt-y" }));
+  const thinking = opts.find(o => o.id === "thinking");
+  assert.deepEqual(thinking.options.map(o => o.value), ["off", "medium", "high"]);
+  const baseline = buildConfigOptions(session());
+  assert.deepEqual(baseline.find(o => o.id === "thinking").options[0], DEFAULT_OPTION);
+});

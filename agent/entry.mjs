@@ -302,13 +302,6 @@ async function spawnPi(session, systemPromptFile, extraArgs = []) {
         session.currentModelValue = modelValue(refreshedState.model);
       }
       session.currentThinkingLevel = refreshedState?.thinkingLevel ?? null;
-      if (session.sessionIsNew && !session.defaultModelValue && !session.defaultThinkingLevel
-          && (refreshedState?.model || refreshedState?.thinkingLevel)) {
-        session.defaultModelValue = session.currentModelValue;
-        session.defaultThinkingLevel = session.currentThinkingLevel;
-        session.sessionIsNew = false;
-        if (pluginState) writeSessionDefaults(pluginState, session.sessionId, { model: session.defaultModelValue, thinkingLevel: session.defaultThinkingLevel });
-      }
     } catch (e) {
       log('get_state refresh failed:', e.message);
     }
@@ -898,7 +891,9 @@ const methods = {
       } catch {}
     } else if (configId === 'thinking') {
       if (isDefaultSentinel(value)) {
-        if (session.defaultThinkingLevel) {
+        // The stored level belongs to the baseline model; elsewhere Pi applies its own default.
+        const onBaselineModel = session.currentModelValue === session.defaultModelValue;
+        if (session.defaultThinkingLevel && onBaselineModel) {
           try {
             await session.pi.send('set_thinking_level', { level: session.defaultThinkingLevel }, { timeout: 10000 });
             session.currentThinkingLevel = session.defaultThinkingLevel;
@@ -910,6 +905,7 @@ const methods = {
           await resyncSessionState(session);
         }
         session.chosenThinkingLevel = null;
+        // Off the baseline model, Pi's default for that model is already running: nothing to change.
         return { configOptions: buildConfigOptions(session) };
       }
       await session.pi.send('set_thinking_level', { level: value }, { timeout: 10000 });
