@@ -20,6 +20,9 @@ export function handleCompactionEvent(session, record) {
 
   if (type === 'summarization_retry_scheduled' || type === 'summarization_retry_attempt_start') {
     if (record.source === 'branchSummary') return null;
+    // Retries only make sense for a compaction already in progress; without a
+    // start there is nothing to patch (and branch summaries carry no source).
+    if (!session.compactionId) return null;
     return patch(session, {
       status: 'in_progress',
       _meta: { pi: { retry: { attempt: record.attempt, maxAttempts: record.maxAttempts, errorMessage: record.errorMessage } } },

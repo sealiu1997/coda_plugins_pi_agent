@@ -350,7 +350,8 @@ function handlePiEvent(session, record) {
   // the turn guard below, and must not be silenced by a cancelled turn.
   if (['compaction_start', 'compaction_end', 'summarization_retry_scheduled', 'summarization_retry_attempt_start'].includes(record.type)) {
     const update = handleCompactionEvent(session, record);
-    if (update) {
+    // ACP: only clients advertising session.compaction may receive updates.
+    if (update && session.compactionSupported) {
       notify('session/update', {
         sessionId: session.sessionId,
         update: { sessionUpdate: 'compaction_update', ...update },

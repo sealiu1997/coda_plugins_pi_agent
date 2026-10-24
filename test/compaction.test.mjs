@@ -30,6 +30,13 @@ test("branch-summary retries are ignored", () => {
   assert.equal(handleCompactionEvent(session, { type: "summarization_retry_attempt_start", source: "branchSummary" }), null);
 });
 
+test("retry without a prior compaction_start is ignored and creates no id", () => {
+  const session = {};
+  assert.equal(handleCompactionEvent(session, { type: "summarization_retry_scheduled", attempt: 1, maxAttempts: 3 }), null);
+  assert.equal(handleCompactionEvent(session, { type: "summarization_retry_attempt_start", source: "compaction", reason: "overflow" }), null);
+  assert.equal(session.compactionId ?? null, null);
+});
+
 test("successful compaction_end reports the summary and clears the id", () => {
   const session = { compactionId: "c1" };
   const update = handleCompactionEvent(session, {
