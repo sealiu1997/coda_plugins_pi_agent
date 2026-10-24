@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { readLines } from './lines.mjs';
 import { PiRpc } from './pi-rpc.mjs';
 import { findPi, piVersion } from './pi-command.mjs';
-import { buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue } from './config-options.mjs';
+import { PI_MODE, buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue } from './config-options.mjs';
 import { readSessionDefaults, writeSessionDefaults } from './session-defaults.mjs';
 import { classifyPiFailure, isPiAuthError, getBase64DecodedSize } from './errors.mjs';
 import { handleCompactionEvent } from './compaction.mjs';
@@ -964,7 +964,10 @@ const methods = {
     await ensurePiRunning(session);
     const { configId, value } = params;
 
-    if (configId === 'model') {
+    if (configId === 'mode') {
+      // The one fixed mode (config-options.mjs): nothing to change in Pi.
+      if (value !== PI_MODE) throw Object.assign(new Error(`不支持的工作模式：${value}`), { code: -32602 });
+    } else if (configId === 'model') {
       if (isDefaultSentinel(value)) {
         if (session.defaultModelValue) {
           try {

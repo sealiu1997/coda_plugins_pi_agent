@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue, DEFAULT_OPTION } from "../agent/config-options.mjs";
+import { buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue, DEFAULT_OPTION, PI_MODE } from "../agent/config-options.mjs";
 
 const session = (overrides = {}) => ({
   models: [{ provider: "anthropic", id: "claude-x", name: "Claude X" }],
@@ -44,7 +44,15 @@ test("the sentinel option is recognized as the no-explicit-choice value", () => 
 
 test("thinking select is skipped when the model has no reasoning", () => {
   const opts = buildConfigOptions(session({ thinkingLevels: ["off"] }));
-  assert.deepEqual(opts.map(o => o.id), ["model"]);
+  assert.deepEqual(opts.map(o => o.id), ["mode", "model"]);
+});
+
+test("one fixed work mode is always reported, so Coda keeps the session as a shortcut", () => {
+  const mode = buildConfigOptions(session()).find(o => o.id === "mode");
+  assert.equal(mode.category, "mode");
+  assert.equal(mode.currentValue, PI_MODE);
+  assert.deepEqual(mode.options.map(o => o.value), [PI_MODE]);
+  assert.equal(buildConfigOptions(session({ models: [] }))[0].id, "mode");
 });
 
 test("the sentinel choice only appears when the baseline is known", () => {
