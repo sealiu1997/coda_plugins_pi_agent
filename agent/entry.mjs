@@ -561,11 +561,11 @@ function finishTurn(session, targetTurn) {
       ...(failure ? { data: { _meta: { coda: { failure } } } } : {}),
     };
     turn.reject?.(err);
-    return;
+  } else {
+    turn.resolve?.({ stopReason });
   }
-
-  turn.resolve?.({ stopReason });
-  // The prompt response is on its way to Coda; refresh the meter out of band.
+  // The prompt response is on its way to Coda; refresh the meter out of band. A turn that failed late still cost what
+  // its earlier model calls and tools did, so it is reported too.
   reportUsage(session);
 }
 
