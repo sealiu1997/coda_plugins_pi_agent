@@ -10,6 +10,7 @@ import { buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue } fr
 import { readSessionDefaults, writeSessionDefaults } from './session-defaults.mjs';
 import { classifyPiFailure, isPiAuthError, getBase64DecodedSize } from './errors.mjs';
 import { handleCompactionEvent } from './compaction.mjs';
+import { usageUpdateFromStats } from './usage.mjs';
 
 const log = (...args) => process.stderr.write(`[pi-agent] ${args.join(' ')}\n`);
 
@@ -55,6 +56,7 @@ class SessionState {
     this.elicitationSupported = false;
     this.compactionSupported = false;
     this.compactionId = null;
+  this.usageInFlight = false;
   }
 }
 
@@ -95,6 +97,29 @@ function notifyAvailableCommands(session) {
       update: { sessionUpdate: 'available_commands_update', availableCommands: commands },
     });
   });
+}
+
+// Fire-and-forget: never throws, never blocks the caller, never overlaps per session.
+function reportUsage(session) {
+  const pi = session?.pi;
+  if (!pi || pi.exited || !pi.ready || session.usageInFlight) return;
+  session.usageInFlight = true;
+  (async () => {
+    try {
+      const stats = await pi.send('get_session_stats', {}, { timeout: 5000 });
+      if (session.pi !== pi || pi.exited) return;
+      const update = usageUpdateFromStats(stats);
+      if (update) {
+        notify('session/update', {
+          sessionId: session.sessionId,
+          update,
+        });
+      }
+    } catch {}
+    finally {
+      session.usageInFlight = false;
+    }
+  })();
 }
 
 function assertContained(targetPath, baseDir) {
@@ -532,6 +557,8 @@ function finishTurn(session, targetTurn) {
   }
 
   turn.resolve?.({ stopReason });
+  // The prompt response is on its way to Coda; refresh the meter out of band.
+  reportUsage(session);
 }
 
 // ---- Tool kind mapping ----
@@ -882,6 +909,7 @@ const methods = {
 
       sessions.set(sessionId, session);
 
+      setImmediate(() => reportUsage(session));
       return { configOptions: session.configOptions };
     } finally {
       loadingSessions.delete(sessionId);
