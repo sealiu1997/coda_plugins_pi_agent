@@ -1,6 +1,6 @@
 // Pi Agent entry: speaks ACP to Coda on stdio, spawns `pi --mode rpc` as a child.
 import { randomUUID, createHash } from 'node:crypto';
-import fs, { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import fs, { existsSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from 'node:fs';
 import { join, dirname, isAbsolute, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readLines } from './lines.mjs';
@@ -11,6 +11,7 @@ import { readSessionDefaults, writeSessionDefaults } from './session-defaults.mj
 import { classifyPiFailure, isPiAuthError, getBase64DecodedSize } from './errors.mjs';
 import { handleCompactionEvent } from './compaction.mjs';
 import { usageUpdateFromStats } from './usage.mjs';
+import { convertCodaMcpServers } from './coda-mcp.mjs';
 
 const log = (...args) => process.stderr.write(`[pi-agent] ${args.join(' ')}\n`);
 
@@ -39,6 +40,8 @@ class SessionState {
     this.cwd = cwd;
     this.pi = null;
     this.systemPromptFile = null;
+    this.mcpServers = {};
+    this.mcpConfigFile = null;
     this.extraArgs = [];
     this.ensuring = null;
     this.turn = null; // { resolve, reject, updates, text, cancelled, steered }
@@ -138,7 +141,7 @@ async function ensurePiRunning(session) {
   if (session.pi && !session.pi.exited && session.pi.ready) return;
   session.ensuring = (async () => {
     try {
-      await spawnPi(session, session.systemPromptFile, session.extraArgs);
+      await spawnPi(session, session.systemPromptFile, session.extraArgs, session.mcpServers);
       session.pi.ready = false;
 
       if (session.chosenModelValue && session.currentModelValue !== session.chosenModelValue) {
@@ -223,10 +226,13 @@ async function ensurePiRunning(session) {
 }
 
 // ---- Spawn pi for a session ----
-async function spawnPi(session, systemPromptFile, extraArgs = []) {
+async function spawnPi(session, systemPromptFile, extraArgs = [], mcpServers = {}) {
   const args = ['--mode', 'rpc', '--session-id', session.sessionId, ...extraArgs];
   // The providers set in Coda (`pi.providers`), registered by an extension that lists their models as Pi starts.
   if (Object.keys(settings['pi.providers'] ?? {}).length) args.push('--extension', join(pluginPath, 'agent', 'providers.mjs'));
+  if (Object.keys(mcpServers).length) {
+    args.push('--extension', join(pluginPath, 'agent', 'coda-mcp.mjs'));
+  }
   if (systemPromptFile) {
     args.push('--append-system-prompt', systemPromptFile);
   }
@@ -253,6 +259,8 @@ async function spawnPi(session, systemPromptFile, extraArgs = []) {
     pathVal = `${nodeDir}:${pathVal}`;
   }
   env.PATH = pathVal;
+  // Only the path crosses the process boundary; server arguments and secrets stay in the 0600 file.
+  if (session.mcpConfigFile) env.PI_CODA_MCP_FILE = session.mcpConfigFile;
 
   const pi = new PiRpc({
     piCommand,
@@ -805,6 +813,24 @@ function writeSystemPrompt(sessionId, text) {
   return file;
 }
 
+// ---- Coda MCP server file ----
+function writeMcpServers(sessionId, servers) {
+  const dir = join(pluginState, 'mcp');
+  const file = join(dir, `${sessionId}.json`);
+  assertContained(file, dir);
+  try { mkdirSync(dir, { recursive: true }); } catch {}
+  writeFileSync(file, JSON.stringify(servers), { encoding: 'utf8', mode: 0o600 });
+  chmodSync(file, 0o600);
+  return file;
+}
+
+function cleanupSessionFiles(session) {
+  for (const file of [session.systemPromptFile, session.mcpConfigFile]) {
+    if (!file) continue;
+    try { fs.rmSync(file, { force: true }); } catch {}
+  }
+}
+
 function validateSystemPrompt(systemPrompt) {
   if (systemPrompt === undefined || systemPrompt === null) return '';
   if (systemPrompt.mode !== 'append' || !Array.isArray(systemPrompt.content)
@@ -857,11 +883,16 @@ const methods = {
       }
 
       session.systemPromptFile = promptFile;
+      session.mcpServers = convertCodaMcpServers(params.mcpServers);
+      if (Object.keys(session.mcpServers).length) {
+        session.mcpConfigFile = writeMcpServers(sessionId, session.mcpServers);
+      }
       session.extraArgs = [];
 
       try {
-        await spawnPi(session, promptFile);
+        await spawnPi(session, promptFile, [], session.mcpServers);
       } catch (e) {
+        cleanupSessionFiles(session);
         throw Object.assign(new Error(e.message), { code: e.code ?? -32603 });
       }
 
@@ -899,11 +930,16 @@ const methods = {
       }
 
       session.systemPromptFile = promptFile;
+      session.mcpServers = convertCodaMcpServers(params.mcpServers);
+      if (Object.keys(session.mcpServers).length) {
+        session.mcpConfigFile = writeMcpServers(sessionId, session.mcpServers);
+      }
       session.extraArgs = [];
 
       try {
-        await spawnPi(session, promptFile);
+        await spawnPi(session, promptFile, [], session.mcpServers);
       } catch (e) {
+        cleanupSessionFiles(session);
         throw Object.assign(new Error(e.message), { code: e.code ?? -32603 });
       }
 
@@ -1399,6 +1435,7 @@ readLines(process.stdin).on('line', async line => {
       session.pi.close();
       session.pi.kill();
     }
+    cleanupSessionFiles(session);
   }
   process.exit(0);
 });
@@ -1410,6 +1447,7 @@ function shutdown() {
       session.pi.kill('SIGTERM');
       session.pi.kill('SIGKILL');
     }
+    cleanupSessionFiles(session);
   }
   process.exit(0);
 }
