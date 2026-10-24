@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import codaMcp, { convertCodaMcpServers } from "../agent/coda-mcp.mjs";
+import codaMcp, { convertCodaMcpServers, literalConfigValue } from "../agent/coda-mcp.mjs";
 
 test("converts stdio servers, including their env array and cwd", () => {
   const servers = convertCodaMcpServers([
@@ -95,4 +95,19 @@ test("the extension reads a 0600 file and continues after one registration fails
   assert.deepEqual(registered.map(([name]) => name), ["coda"]);
   assert.equal((await stat(file)).mode & 0o777, 0o600);
   assert.equal(JSON.parse(await readFile(file, "utf8")).coda.exposure, "direct");
+});
+
+test("writes env and header values in Pi's literal form, so Pi neither runs nor expands them", () => {
+  assert.equal(literalConfigValue("plain"), "plain");
+  assert.equal(literalConfigValue("!printf RAN"), "$!printf RAN");
+  assert.equal(literalConfigValue("Bearer ${TOKEN}"), "Bearer $${TOKEN}");
+  assert.equal(literalConfigValue("$HOME"), "$$HOME");
+  assert.equal(literalConfigValue("!$X"), "$!$$X");
+  assert.equal(literalConfigValue("x!y"), "x!y");
+  const servers = convertCodaMcpServers([
+    { name: "tools", command: "/bin/tools", env: [{ name: "KEY", value: "!rm -rf ~" }] },
+    { name: "web", type: "http", url: "https://example.com/mcp", headers: [{ name: "Authorization", value: "Bearer $TOKEN" }] },
+  ]);
+  assert.equal(servers.tools.env.KEY, "$!rm -rf ~");
+  assert.equal(servers.web.headers.Authorization, "Bearer $$TOKEN");
 });

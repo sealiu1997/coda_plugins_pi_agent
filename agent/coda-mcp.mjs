@@ -4,12 +4,19 @@ import { readFileSync } from 'node:fs';
 const log = (...args) => process.stderr.write(`[pi-agent] ${args.join(' ')}\n`);
 const validName = name => typeof name === 'string' && /^[A-Za-z0-9_-]+$/.test(name);
 
+// Pi reads MCP env and header values as config values: a leading `!` runs a shell command and `$VAR` / `${VAR}` expand.
+// Coda's values are literal, so they are written in Pi's literal form: `$$` for `$`, and `$!` for a leading `!`.
+export function literalConfigValue(value) {
+  const escaped = value.replaceAll('$', '$$$$');
+  return escaped.startsWith('!') ? `$${escaped}` : escaped;
+}
+
 function pairsToObject(items) {
   const result = {};
   if (!Array.isArray(items)) return result;
   for (const item of items) {
     if (typeof item?.name === 'string' && typeof item.value === 'string') {
-      result[item.name] = item.value;
+      result[item.name] = literalConfigValue(item.value);
     }
   }
   return result;

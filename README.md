@@ -44,7 +44,7 @@
   此前建的会话没有这份记录，不提供「Pi 默认」。
 - `agentInfo.version` 报实际运行的 `pi --version`，读不到时报插件版本。
 - `mcpServers`（含 Coda 自己的 `coda` 服务器）转成 Pi 的 `mcp.json` 形式，由 `agent/coda-mcp.mjs` 扩展用 `pi.registerMcpServer` 注册、交 Pi 连接；
-  配置经插件状态目录里 0600 的文件传递，不进命令行参数与环境变量。`coda` 服务器的工具直接暴露给模型（`exposure: direct`），其余按 Pi 默认（codemode）。
+  配置经插件状态目录里 0600 的文件传递，不进命令行参数与环境变量；`env` 与 `headers` 的值按 Pi 的字面量写法转义（`$` 写成 `$$`，开头的 `!` 写成 `$!`），Pi 不会把它们当命令执行或展开变量。`coda` 服务器的工具直接暴露给模型（`exposure: direct`），其余按 Pi 默认（codemode）。
   `~/.pi/agent/mcp.json` 里有同名服务器时以它为准；不支持 SSE 服务器。
 - Pi 的上下文整理（`compaction_start` / `compaction_end` / 摘要重试）映射为 `compaction_update`，失败带原因；Coda 未声明 `session.compaction` 时，失败改为在回复里提示。
 - 每轮结束和恢复会话后，用 Pi 的 `get_session_stats` 发 `usage_update`（上下文已用 / 总量、累计费用，按 USD）；刚整理完、Pi 暂无用量时不发。
