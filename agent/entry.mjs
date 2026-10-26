@@ -14,6 +14,7 @@ import { usageUpdateFromStats } from './usage.mjs';
 import { convertCodaMcpServers } from './coda-mcp.mjs';
 import { titleMaterial, generateTitle } from './titles.mjs';
 import { envForPi } from './pi-env.mjs';
+import { stopChildren } from './shutdown.mjs';
 
 const log = (...args) => process.stderr.write(`[pi-agent] ${args.join(' ')}\n`);
 
@@ -1466,40 +1467,25 @@ readLines(process.stdin).on('line', async line => {
   } catch (error) {
     refuse(message.id, error.code ?? -32603, error.message, error.data);
   }
-}).on('close', () => {
-  // stdin closed: Pi's rpc mode exits on its own end-of-input; a TERM is the backstop, and
-  // the grace before KILL keeps a mid-write session line from being truncated.
-  for (const session of sessions.values()) {
-    if (session.pi) session.pi.close();
-  }
-  setTimeout(() => {
-    for (const session of sessions.values()) killPi(session.pi);
-    removeMcpFiles();
-    process.exit(0);
-  }, TERM_GRACE_MS).unref?.();
-});
+}).on('close', () => { void shutdown({ closeFirst: true }); });
 
 // ---- Lifecycle: SIGTERM/SIGINT ----
 // Pi flushes its session file as it goes, but a kill in the middle of a write can still
 // truncate the last line; give it the same grace the spawn-failure path does before SIGKILL.
 const TERM_GRACE_MS = 500;
-function killPi(pi) {
-  if (!pi || pi.exited) return;
-  pi.kill('SIGTERM');
-  const timer = setTimeout(() => {
-    try { pi.kill('SIGKILL'); } catch {}
-  }, TERM_GRACE_MS);
-  timer.unref?.();
+let stopping = null;
+async function shutdown({ closeFirst = false } = {}) {
+  if (stopping) return stopping;
+  stopping = (async () => {
+    const children = [...sessions.values()].map(session => session.pi).filter(Boolean);
+    // End-of-input lets Pi flush and leave on its own. Hold the parent open through the
+    // grace period, then kill a child that has not settled.
+    await stopChildren(children, { grace: TERM_GRACE_MS, closeFirst });
+    removeMcpFiles();
+    process.exit(0);
+  })();
+  return stopping;
 }
-function shutdown() {
-  for (const session of sessions.values()) {
-    session.pi?.close();
-    killPi(session.pi);
-  }
-  removeMcpFiles();
-  // The grace timer is the only thing left to wait for; unref'd children of a process
-  // this size exit on their own once Pi is gone, so leave without waiting the full span.
-  process.exit(0);
-}
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+const onSignal = () => { void shutdown(); };
+process.on('SIGTERM', onSignal);
+process.on('SIGINT', onSignal);

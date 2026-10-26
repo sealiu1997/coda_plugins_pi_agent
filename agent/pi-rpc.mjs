@@ -19,6 +19,7 @@ export class PiRpc {
     this._args = args;
     this._cwd = cwd;
     this._env = env;
+    this._exitPromise = new Promise(resolve => { this._resolveExit = resolve; });
   }
 
   spawn() {
@@ -46,6 +47,7 @@ export class PiRpc {
 
     child.on('close', (code, signal) => {
       this._exited = true;
+      this._resolveExit({ code, signal });
       // Fail all pending requests
       for (const [id, entry] of this._pending) {
         clearTimeout(entry.timer);
@@ -112,6 +114,7 @@ export class PiRpc {
 
   get exited() { return this._exited; }
   get stderrTail() { return this._stderrTail; }
+  waitForExit() { return this._exitPromise; }
 
   close() {
     if (!this._child || this._exited) return;
