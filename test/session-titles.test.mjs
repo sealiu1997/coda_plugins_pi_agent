@@ -5,7 +5,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { once } from "node:events";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,17 +14,31 @@ import { fileURLToPath } from "node:url";
 const pluginPath = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // The stand-in Pi answers the startup commands; a prompt ends well. Called with --print (the
-// plugin's summary child), it answers a short title. set_session_name is answered and
-// confirmed with the session_info_changed a real Pi emits from setSessionName.
+// plugin's summary child), it checks its explicit model extensions and answers a short title.
+// FAKE_TITLE_BLOCK_MS makes that child hang so shutdown can be tested during naming.
+// set_session_name is answered and confirmed with the session_info_changed a real Pi emits.
 const FAKE_PI = `#!${process.execPath}
+import { appendFileSync, openSync, writeSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import { createInterface } from "node:readline";
 if (process.argv.includes("--print")) {
-  const extensionIndex = process.argv.indexOf("--extension");
-  if (extensionIndex < 0 || !process.argv[extensionIndex + 1]?.includes("agent/providers.mjs")) {
+  const extensions = [];
+  for (let i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] === "--extension") extensions.push(process.argv[i + 1]);
+  }
+  if (!extensions.some(path => path?.includes("agent/providers.mjs")) ||
+      !extensions.some(path => path?.includes("model-provider.mjs"))) {
     process.exit(2);
   }
+  if (process.env.FAKE_TITLE_PID_FILE) {
+    writeSync(openSync(process.env.FAKE_TITLE_PID_FILE, "w"), process.env.FAKE_TITLE_RUN_ID ?? String(process.pid));
+  }
+  if (process.env.FAKE_TITLE_SIGNALS_FILE) {
+    process.on("SIGTERM", () => appendFileSync(process.env.FAKE_TITLE_SIGNALS_FILE, "TERM\\n"));
+  }
+  if (process.env.FAKE_TITLE_BLOCK_MS) await delay(Number(process.env.FAKE_TITLE_BLOCK_MS));
   process.stdout.write("插件打包与发布");
-  process.exit(0);
+  if (!process.env.FAKE_TITLE_BLOCK_MS) process.exit(0);
 }
 const out = record => process.stdout.write(JSON.stringify(record) + "\\n");
 const data = {
@@ -47,7 +62,20 @@ createInterface({ input: process.stdin }).on("line", line => {
 });
 `;
 
-async function runAgent(dir) {
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const exists = async path => {
+  try { await readFile(path); return true; } catch { return false; }
+};
+const alive = pid => {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+};
+const waitForExit = async (pid, timeout = 500) => {
+  const deadline = Date.now() + timeout;
+  while (alive(pid) && Date.now() < deadline) await delay(10);
+  return !alive(pid);
+};
+
+async function runAgent(dir, extraEnv = {}) {
   const fakePi = join(dir, "pi");
   await writeFile(fakePi, FAKE_PI);
   await chmod(fakePi, 0o755);
@@ -58,7 +86,10 @@ async function runAgent(dir) {
       CODA_PLUGIN_SETTINGS: JSON.stringify({
         "pi.commandPath": fakePi,
         "pi.providers": { magpie: { url: "http://127.0.0.1:3425/v1" } },
-      }) },
+        "pi.extraArgs": "--extension /models/model-provider.mjs",
+      }),
+      ...extraEnv,
+    },
   });
   const messages = [];
   let pending = "";
@@ -97,4 +128,41 @@ test("a session is named from its first finished turn, and the name reaches Coda
   await until(() => messages.some(m => m.params?.update?.sessionUpdate === "session_info_update"));
   const titles = messages.filter(m => m.params?.update?.sessionUpdate === "session_info_update").map(m => m.params.update.title);
   assert.deepEqual(titles, ["插件打包与发布"]);
+});
+
+test("shutdown reaps a title child that is still running", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-title-shutdown-"));
+  const titlePidFile = join(dir, "title.pid");
+  const titleSignalsFile = join(dir, "title.signals");
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const { agent, messages, until, request } = await runAgent(dir, {
+    FAKE_TITLE_BLOCK_MS: "60000",
+    FAKE_TITLE_PID_FILE: titlePidFile,
+    FAKE_TITLE_SIGNALS_FILE: titleSignalsFile,
+  });
+  t.after(async () => {
+    agent.kill("SIGKILL");
+    try {
+      const pid = Number(await readFile(titlePidFile, "utf8"));
+      if (pid) process.kill(pid, "SIGKILL");
+    } catch {}
+  });
+  request(1, "initialize", { protocolVersion: 1 });
+  await until(() => messages.some(m => m.id === 1));
+  request(2, "session/new", { cwd: dir, mcpServers: [] });
+  await until(() => messages.some(m => m.id === 2));
+  const { sessionId } = messages.find(m => m.id === 2).result;
+  request(3, "session/prompt", { sessionId, prompt: [{ type: "text", text: "看一下怎么把这个插件打包发布" }] });
+  await until(() => messages.some(m => m.id === 3));
+  while (!(await exists(titlePidFile))) await delay(10);
+  const titlePid = Number(await readFile(titlePidFile, "utf8"));
+  assert.equal(alive(titlePid), true);
+
+  const started = Date.now();
+  agent.kill("SIGTERM");
+  const [code] = await once(agent, "close");
+  assert.equal(code, 0);
+  assert.ok(Date.now() - started >= 450, "shutdown gave the title child a TERM grace");
+  assert.equal(await waitForExit(titlePid), true, "the title child was reaped");
+  assert.equal(await readFile(titleSignalsFile, "utf8"), "TERM\n");
 });

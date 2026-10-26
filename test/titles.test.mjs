@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { titleMaterial, generateTitle } from "../agent/titles.mjs";
+import { titleMaterial, generateTitle, titleChildren } from "../agent/titles.mjs";
 import { envForPi } from "../agent/pi-env.mjs";
 
 test("title material is the first prompt and reply, cut short; null when there is too little to name", () => {
@@ -43,7 +43,7 @@ test("the title child is asked without a session, tools, or extensions, on the s
   const seen = [];
   const spawnFn = (command, args) => {
     seen.push(args);
-    return { stdout: { on: () => {}, destroy: () => {} }, on: () => {}, kill: () => {} };
+    return { pid: 1, stdout: { on: () => {}, destroy: () => {} }, once: () => {}, on: () => {}, kill: () => {} };
   };
   await generateTitle("/bin/pi", "/tmp", "magpie/auto/x", "用户：打包插件", { spawnFn, timeout: 100 });
   const args = seen[0];
@@ -52,20 +52,43 @@ test("the title child is asked without a session, tools, or extensions, on the s
   assert.match(args.at(-1), /^用一句话/);
 });
 
-test("a title for a Coda provider loads the providers extension explicitly", async () => {
+test("a title loads the requested model extensions explicitly", async () => {
   const seen = [];
   const spawnFn = (_command, args) => {
     seen.push(args);
-    return { stdout: { on: () => {}, destroy: () => {} }, on: () => {}, kill: () => {} };
+    return { pid: 1, stdout: { on: () => {}, destroy: () => {} }, once: () => {}, on: () => {}, kill: () => {} };
   };
   await generateTitle("/bin/pi", "/tmp", "magpie/auto/x", "用户：打包插件", {
     spawnFn,
     timeout: 100,
-    providersExtension: "/plugin/agent/providers.mjs",
+    extensionPaths: ["/plugin/agent/providers.mjs", "/models/custom-provider.mjs"],
   });
   const args = seen[0];
   assert.ok(args.includes("--no-extensions"));
-  assert.deepEqual(args.filter((a, i) => args[i - 1] === "--extension"), ["/plugin/agent/providers.mjs"]);
+  assert.deepEqual(args.filter((a, i) => args[i - 1] === "--extension"), [
+    "/plugin/agent/providers.mjs",
+    "/models/custom-provider.mjs",
+  ]);
+});
+
+test("a running title child is exposed for shutdown and removed when it closes", async () => {
+  const closeCallbacks = [];
+  const child = {
+    pid: 1,
+    stdout: { on: () => {}, destroy: () => {} },
+    once: (event, callback) => { if (event === "close") closeCallbacks.push(callback); },
+    on: () => {},
+    kill: () => {},
+    __mock: true,
+  };
+  const pending = generateTitle("/bin/pi", "/tmp", null, "用户：打包插件", {
+    spawnFn: () => child,
+    timeout: 100,
+  });
+  assert.equal(titleChildren().some(item => item.child === child), true);
+  closeCallbacks.forEach(callback => callback());
+  await pending;
+  assert.equal(titleChildren().some(item => item.child === child), false);
 });
 
 test("a pi outside the PATH and Coda's node dir are both prepended, each once", () => {

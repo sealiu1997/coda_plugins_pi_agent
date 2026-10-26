@@ -12,9 +12,10 @@ import { classifyPiFailure, isPiAuthError, getBase64DecodedSize } from './errors
 import { handleCompactionEvent } from './compaction.mjs';
 import { usageUpdateFromStats } from './usage.mjs';
 import { convertCodaMcpServers } from './coda-mcp.mjs';
-import { titleMaterial, generateTitle } from './titles.mjs';
+import { titleMaterial, generateTitle, titleChildren } from './titles.mjs';
 import { envForPi } from './pi-env.mjs';
 import { stopChildren } from './shutdown.mjs';
+import { parsePiExtraArgs, extensionPathsFromArgs } from './pi-args.mjs';
 
 const log = (...args) => process.stderr.write(`[pi-agent] ${args.join(' ')}\n`);
 
@@ -243,11 +244,7 @@ async function spawnPi(session, systemPromptFile, extraArgs = [], mcpServers = {
     args.push('--append-system-prompt', systemPromptFile);
   }
   // Extra CLI args from settings
-  const extraCliArgs = settings['pi.extraArgs'];
-  if (extraCliArgs) {
-    if (Array.isArray(extraCliArgs)) args.push(...extraCliArgs);
-    else if (typeof extraCliArgs === 'string') args.push(...extraCliArgs.split(/\s+/).filter(Boolean));
-  }
+  args.push(...parsePiExtraArgs(settings['pi.extraArgs']));
 
   // Use the machine's own Pi configuration, credentials, extensions and session
   // store as-is (PI_CODING_AGENT_DIR or ~/.pi/agent), so sessions also show up
@@ -586,11 +583,14 @@ async function maybeNameSession(session, turn) {
   const pi = session.pi;
   try {
     const model = session.currentModelValue;
-    const providers = Object.keys(settings['pi.providers'] ?? {}).length > 0;
-    const providersExtension = providers ? join(pluginPath, 'agent', 'providers.mjs') : undefined;
+    const extensionPaths = [];
+    if (Object.keys(settings['pi.providers'] ?? {}).length > 0) {
+      extensionPaths.push(join(pluginPath, 'agent', 'providers.mjs'));
+    }
+    extensionPaths.push(...extensionPathsFromArgs(parsePiExtraArgs(settings['pi.extraArgs'])));
     const title = await generateTitle(piCommand, session.cwd, model, dialogue, {
       node: codaNode,
-      providersExtension,
+      extensionPaths: [...new Set(extensionPaths)],
     });
     if (!title) { session.titleState = 'done'; return; }
     // Pi may have died or been replaced while the summary child ran; only the live one is named.
@@ -1477,7 +1477,10 @@ let stopping = null;
 async function shutdown({ closeFirst = false } = {}) {
   if (stopping) return stopping;
   stopping = (async () => {
-    const children = [...sessions.values()].map(session => session.pi).filter(Boolean);
+    const children = [
+      ...[...sessions.values()].map(session => session.pi).filter(Boolean),
+      ...titleChildren(),
+    ];
     // End-of-input lets Pi flush and leave on its own. Hold the parent open through the
     // grace period, then kill a child that has not settled.
     await stopChildren(children, { grace: TERM_GRACE_MS, closeFirst });
