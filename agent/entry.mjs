@@ -585,7 +585,12 @@ async function maybeNameSession(session, turn) {
   const pi = session.pi;
   try {
     const model = session.currentModelValue;
-    const title = await generateTitle(piCommand, session.cwd, model, dialogue, { node: codaNode });
+    const providers = Object.keys(settings['pi.providers'] ?? {}).length > 0;
+    const providersExtension = providers ? join(pluginPath, 'agent', 'providers.mjs') : undefined;
+    const title = await generateTitle(piCommand, session.cwd, model, dialogue, {
+      node: codaNode,
+      providersExtension,
+    });
     if (!title) { session.titleState = 'done'; return; }
     // Pi may have died or been replaced while the summary child ran; only the live one is named.
     if (!session.pi || session.pi.exited || session.pi !== pi) { session.titleState = 'done'; return; }

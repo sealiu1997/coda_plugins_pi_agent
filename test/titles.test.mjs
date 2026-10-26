@@ -52,6 +52,22 @@ test("the title child is asked without a session, tools, or extensions, on the s
   assert.match(args.at(-1), /^用一句话/);
 });
 
+test("a title for a Coda provider loads the providers extension explicitly", async () => {
+  const seen = [];
+  const spawnFn = (_command, args) => {
+    seen.push(args);
+    return { stdout: { on: () => {}, destroy: () => {} }, on: () => {}, kill: () => {} };
+  };
+  await generateTitle("/bin/pi", "/tmp", "magpie/auto/x", "用户：打包插件", {
+    spawnFn,
+    timeout: 100,
+    providersExtension: "/plugin/agent/providers.mjs",
+  });
+  const args = seen[0];
+  assert.ok(args.includes("--no-extensions"));
+  assert.deepEqual(args.filter((a, i) => args[i - 1] === "--extension"), ["/plugin/agent/providers.mjs"]);
+});
+
 test("a pi outside the PATH and Coda's node dir are both prepended, each once", () => {
   const env = envForPi({ PATH: "/usr/bin:/bin" }, "/opt/pi/bin/pi", "/coda/node/bin/node");
   assert.equal(env.PATH, "/coda/node/bin:/opt/pi/bin:/usr/bin:/bin");

@@ -18,6 +18,10 @@ const pluginPath = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FAKE_PI = `#!${process.execPath}
 import { createInterface } from "node:readline";
 if (process.argv.includes("--print")) {
+  const extensionIndex = process.argv.indexOf("--extension");
+  if (extensionIndex < 0 || !process.argv[extensionIndex + 1]?.includes("agent/providers.mjs")) {
+    process.exit(2);
+  }
   process.stdout.write("插件打包与发布");
   process.exit(0);
 }
@@ -49,13 +53,18 @@ async function runAgent(dir) {
   await chmod(fakePi, 0o755);
   const agent = spawn(process.execPath, [join(pluginPath, "agent", "entry.mjs")], {
     cwd: dir,
-    stdio: ["pipe", "pipe", "ignore"],
+    stdio: ["pipe", "pipe", "pipe"],
     env: { ...process.env, CODA_PLUGIN_PATH: pluginPath, CODA_PLUGIN_STATE: join(dir, "state"),
-      CODA_PLUGIN_SETTINGS: JSON.stringify({ "pi.commandPath": fakePi }) },
+      CODA_PLUGIN_SETTINGS: JSON.stringify({
+        "pi.commandPath": fakePi,
+        "pi.providers": { magpie: { url: "http://127.0.0.1:3425/v1" } },
+      }) },
   });
   const messages = [];
   let pending = "";
+  let stderr = "";
   const waiters = [];
+  agent.stderr.on("data", chunk => { stderr += chunk; });
   agent.stdout.on("data", chunk => {
     pending += chunk;
     let newline;
@@ -67,7 +76,7 @@ async function runAgent(dir) {
   });
   const until = found => found() ? Promise.resolve() : new Promise((resolve, reject) => {
     waiters.push({ found, resolve });
-    setTimeout(() => reject(new Error(`timed out; got ${JSON.stringify(messages)}`)), 10000).unref();
+    setTimeout(() => reject(new Error(`timed out; got ${JSON.stringify(messages)}; stderr: ${stderr}`)), 10000).unref();
   });
   const request = (id, method, params) => agent.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
   return { agent, messages, until, request };

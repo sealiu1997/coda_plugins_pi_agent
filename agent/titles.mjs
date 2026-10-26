@@ -3,8 +3,10 @@
 // Coda's Claude plugin does with the SDK's title generator: the first user message and the
 // first reply, summarized to a short title. The summary is a `pi --print` child of its own
 // (`--no-session`: it leaves no trace in the session the user sees), never runs tools, and
-// takes the same model the session just used. What it answers is set as the Pi session's
-// name (`set_session_name`), and Pi's `session_info_changed` hands it to Coda from there.
+// takes the same model the session just used; when that model's provider is one Coda added,
+// the same providers extension is loaded explicitly (`--no-extensions` still allows `-e`).
+// What it answers is set as the Pi session's name (`set_session_name`), and Pi's
+// `session_info_changed` hands it to Coda from there.
 import { spawn } from 'node:child_process';
 import { envForPi } from './pi-env.mjs';
 
@@ -28,12 +30,13 @@ export function titleMaterial(firstPrompt, firstReply) {
 // A short title for the dialogue, from a `pi --print` child. Resolves null when the child
 // fails, times out, or answers nothing usable: a session without a title is a session the
 // user can still name, never a reason to fail anything else.
-export async function generateTitle(piCommand, cwd, model, dialogue, { timeout = TITLE_TIMEOUT, spawnFn = spawn, env = process.env, node } = {}) {
+export async function generateTitle(piCommand, cwd, model, dialogue, { timeout = TITLE_TIMEOUT, spawnFn = spawn, env = process.env, node, providersExtension } = {}) {
   if (!dialogue) return null;
   const args = [
     '--print', '--mode', 'text', '--no-session', '--no-tools', '--no-extensions', '--no-mcp',
     '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files', '--thinking', 'off',
   ];
+  if (providersExtension) args.push('--extension', providersExtension);
   if (model) args.push('--model', model);
   args.push(`${TITLE_PROMPT}\n\n${dialogue}`);
   return new Promise(resolve => {
