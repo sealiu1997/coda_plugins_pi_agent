@@ -12,6 +12,25 @@ import { fileURLToPath } from "node:url";
 import { stopActiveChildren, stopChildren } from "../agent/shutdown.mjs";
 
 const pluginPath = join(dirname(fileURLToPath(import.meta.url)), "..");
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+const INITIALIZING_PI = `#!${process.execPath}
+import { appendFileSync, openSync, writeSync } from "node:fs";
+import { createInterface } from "node:readline";
+writeSync(openSync(process.env.FAKE_PI_PID_FILE, "w"), String(process.pid));
+process.on("SIGTERM", () => {
+  appendFileSync(process.env.FAKE_PI_SIGNALS_FILE, "TERM\\n");
+  setTimeout(() => process.exit(0), 1000);
+});
+const out = record => process.stdout.write(JSON.stringify(record) + "\\n");
+createInterface({ input: process.stdin }).on("line", line => {
+  const command = JSON.parse(line);
+  if (command.type === "get_state") {
+    out({ type: "response", id: command.id, command: command.type, success: true,
+      data: { model: { provider: "p", id: "m" }, thinkingLevel: "off", sessionName: null } });
+  }
+});
+`;
 
 const FAKE_PI = `#!${process.execPath}
 import { appendFileSync, openSync, writeSync } from "node:fs";
@@ -41,6 +60,54 @@ async function waitForExit(pid, timeout = 500) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
   return !alive(pid);
+}
+
+async function runInitializingAgent(t, method) {
+  const dir = await mkdtemp(join(tmpdir(), `pi-${method.replace("/", "-")}-init-`));
+  const fakePi = join(dir, "pi");
+  const pidFile = join(dir, "pi.pid");
+  const signalsFile = join(dir, "pi.signals");
+  await writeFile(fakePi, INITIALIZING_PI);
+  await chmod(fakePi, 0o755);
+  const agent = spawn(process.execPath, [join(pluginPath, "agent", "entry.mjs")], {
+    cwd: dir,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      CODA_PLUGIN_PATH: pluginPath,
+      CODA_PLUGIN_STATE: join(dir, "state"),
+      CODA_PLUGIN_SETTINGS: JSON.stringify({ "pi.commandPath": fakePi }),
+      FAKE_PI_PID_FILE: pidFile,
+      FAKE_PI_SIGNALS_FILE: signalsFile,
+    },
+  });
+  let output = "";
+  let stderr = "";
+  agent.stdout.on("data", chunk => { output += chunk; });
+  agent.stderr.on("data", chunk => { stderr += chunk; });
+  t.after(async () => {
+    agent.kill("SIGKILL");
+    try {
+      const pid = Number(await readFile(pidFile, "utf8"));
+      process.kill(pid, "SIGKILL");
+    } catch {}
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  agent.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1 } }) + "\n");
+  while (!output.includes('"id":1')) await once(agent.stdout, "data");
+  const params = method === "session/new"
+    ? { cwd: dir, mcpServers: [] }
+    : { sessionId: "load-during-init", cwd: dir, mcpServers: [] };
+  agent.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method, params }) + "\n");
+  let pid = NaN;
+  const pidDeadline = Date.now() + 2000;
+  while (!alive(pid) && Date.now() < pidDeadline) {
+    pid = Number(await readFile(pidFile, "utf8").catch(() => "0"));
+    if (!alive(pid)) await delay(10);
+  }
+  assert.equal(alive(pid), true);
+  return { agent, pid, signalsFile, getStderr: () => stderr };
 }
 
 test("stopChildren sends TERM, waits its grace, then KILL", async () => {
@@ -128,6 +195,29 @@ test("stopActiveChildren drains children registered after shutdown begins", asyn
   await draining;
   assert.deepEqual(events, ["first:SIGTERM", "late:SIGTERM"]);
 });
+
+for (const method of ["session/new", "session/load"]) {
+  test(`${method} reaps its Pi when SIGTERM arrives during initialization`, async t => {
+    const { agent, pid, signalsFile } = await runInitializingAgent(t, method);
+    const started = Date.now();
+    agent.kill("SIGTERM");
+    const [code, signal] = await once(agent, "close");
+    assert.equal(code, 0, signal ?? undefined);
+    assert.ok(Date.now() - started >= 450, "shutdown gave the initializing Pi its TERM grace");
+    assert.equal(await waitForExit(pid), true, "the initializing Pi was reaped");
+    assert.match(await readFile(signalsFile, "utf8"), /TERM/);
+  });
+}
+
+for (const method of ["session/new", "session/load"]) {
+  test(`closing stdin reaps a Pi still initializing ${method}`, async t => {
+    const { agent, pid, getStderr } = await runInitializingAgent(t, method);
+    agent.stdin.end();
+    const [code, signal] = await once(agent, "close");
+    assert.equal(code, 0, signal ?? getStderr());
+    assert.equal(await waitForExit(pid), true, "the initializing Pi was reaped");
+  });
+}
 
 test("shutdown waits through TERM grace and reaps a Pi child that ignores it", async t => {
   const dir = await mkdtemp(join(tmpdir(), "pi-shutdown-"));

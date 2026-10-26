@@ -4,7 +4,7 @@ import fs, { existsSync, mkdirSync, writeFileSync, readFileSync, chmodSync } fro
 import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readLines } from './lines.mjs';
-import { PiRpc } from './pi-rpc.mjs';
+import { PiRpc, piProcesses } from './pi-rpc.mjs';
 import { findPi, piVersion } from './pi-command.mjs';
 import { PI_MODE, buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue } from './config-options.mjs';
 import { readSessionDefaults, writeSessionDefaults } from './session-defaults.mjs';
@@ -1478,10 +1478,7 @@ async function shutdown({ closeFirst = false } = {}) {
   if (stopping) return stopping;
   stopping = (async () => {
     beginTitleShutdown();
-    const activeChildren = () => [
-      ...[...sessions.values()].map(session => session.pi).filter(Boolean),
-      ...titleChildren(),
-    ];
+    const activeChildren = () => [...piProcesses(), ...titleChildren()];
     // End-of-input lets Pi flush and leave on its own. Hold the parent open through the
     // grace period, then kill a child that has not settled. The loop also catches title
     // children that finish spawning after shutdown starts.
