@@ -13,6 +13,7 @@ import { envForPi } from './pi-env.mjs';
 const TITLE_TIMEOUT = 30000;
 const TITLE_PROMPT = '用一句话给下面的对话起一个不超过 16 个字的中文会话标题。只回答标题本身，不要任何解释、引号或标点结尾。';
 const activeChildren = new Set();
+let shuttingDown = false;
 
 class TitleChild {
   constructor(child) {
@@ -49,6 +50,12 @@ export function titleChildren() {
   return [...activeChildren];
 }
 
+// Stop starting new title children. The shared stopActiveChildren loop drains the ones
+// already registered and catches any child that finishes spawning while shutdown runs.
+export function beginTitleShutdown() {
+  shuttingDown = true;
+}
+
 const firstText = (blocks, limit) => {
   const text = (blocks ?? []).filter(b => b?.type === 'text').map(b => b.text).join('\n').trim();
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
@@ -68,6 +75,7 @@ export function titleMaterial(firstPrompt, firstReply) {
 // user can still name, never a reason to fail anything else.
 export async function generateTitle(piCommand, cwd, model, dialogue, { timeout = TITLE_TIMEOUT, spawnFn = spawn, env = process.env, node, extensionPaths = [] } = {}) {
   if (!dialogue) return null;
+  if (shuttingDown) return null;
   const args = [
     '--print', '--mode', 'text', '--no-session', '--no-tools', '--no-extensions', '--no-mcp',
     '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files', '--thinking', 'off',
@@ -92,6 +100,9 @@ export async function generateTitle(piCommand, cwd, model, dialogue, { timeout =
     }
     const tracked = new TitleChild(child);
     activeChildren.add(tracked);
+    // The pre-spawn check is normally sufficient in this single-threaded process. Keep this
+    // fallback at the registration point so a custom or future spawn path cannot escape.
+    if (shuttingDown) tracked.kill('SIGTERM');
     let out = '', done = false;
     const finish = value => {
       if (done) return;

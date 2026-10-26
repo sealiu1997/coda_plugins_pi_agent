@@ -74,6 +74,10 @@ const waitForExit = async (pid, timeout = 500) => {
   while (alive(pid) && Date.now() < deadline) await delay(10);
   return !alive(pid);
 };
+const killIfAlive = pid => {
+  if (!pid || !alive(pid)) return;
+  try { process.kill(pid, "SIGKILL"); } catch {}
+};
 
 async function runAgent(dir, extraEnv = {}) {
   const fakePi = join(dir, "pi");
@@ -165,4 +169,39 @@ test("shutdown reaps a title child that is still running", async t => {
   assert.ok(Date.now() - started >= 450, "shutdown gave the title child a TERM grace");
   assert.equal(await waitForExit(titlePid), true, "the title child was reaped");
   assert.equal(await readFile(titleSignalsFile, "utf8"), "TERM\n");
+});
+
+test("closing stdin during naming reaps the title child and lets the agent exit", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-title-stdin-close-"));
+  const titlePidFile = join(dir, "title.pid");
+  let titlePid;
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const { agent, messages, until, request } = await runAgent(dir, {
+    FAKE_TITLE_BLOCK_MS: "60000",
+    FAKE_TITLE_PID_FILE: titlePidFile,
+  });
+  let stderr = "";
+  agent.stderr.on("data", chunk => { stderr += chunk; });
+  t.after(() => {
+    agent.kill("SIGKILL");
+    killIfAlive(titlePid);
+  });
+  request(1, "initialize", { protocolVersion: 1 });
+  await until(() => messages.some(m => m.id === 1));
+  request(2, "session/new", { cwd: dir, mcpServers: [] });
+  await until(() => messages.some(m => m.id === 2));
+  const { sessionId } = messages.find(m => m.id === 2).result;
+  request(3, "session/prompt", { sessionId, prompt: [{ type: "text", text: "看一下怎么把这个插件打包发布" }] });
+  await until(() => messages.some(m => m.id === 3));
+  while (!(await exists(titlePidFile))) await delay(10);
+  titlePid = Number(await readFile(titlePidFile, "utf8"));
+  assert.equal(alive(titlePid), true);
+
+  const started = Date.now();
+  agent.stdin.end();
+  const [code] = await once(agent, "close");
+  assert.equal(code, 0, stderr);
+  assert.doesNotMatch(stderr, /TypeError/);
+  assert.ok(Date.now() - started >= 450, "stdin close gave the title child a TERM grace");
+  assert.equal(await waitForExit(titlePid), true, "the title child was reaped");
 });

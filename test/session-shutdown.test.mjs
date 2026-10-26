@@ -9,7 +9,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { stopChildren } from "../agent/shutdown.mjs";
+import { stopActiveChildren, stopChildren } from "../agent/shutdown.mjs";
 
 const pluginPath = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -63,6 +63,70 @@ test("stopChildren sends TERM, waits its grace, then KILL", async () => {
   assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
   assert.ok(Date.now() - started >= 70);
   assert.equal(exited, true);
+});
+
+test("stopChildren closes only handles that support stdin, then still reaps the rest", async () => {
+  const events = [];
+  const makeChild = name => {
+    let exited = false;
+    let resolveExit;
+    const exit = new Promise(resolve => { resolveExit = resolve; });
+    return {
+      name,
+      get exited() { return exited; },
+      waitForExit() { return exit; },
+      close() { events.push(`${name}:close`); },
+      kill(signal) {
+        events.push(`${name}:${signal}`);
+        if (signal === "SIGKILL") {
+          exited = true;
+          resolveExit();
+        }
+      },
+    };
+  };
+  const main = makeChild("main");
+  const title = makeChild("title");
+  delete title.close;
+  main.close = () => events.push("main:close");
+  await stopChildren([main, title], { grace: 20, closeFirst: true });
+  assert.deepEqual(events.sort(), [
+    "main:SIGKILL",
+    "main:SIGTERM",
+    "main:close",
+    "title:SIGKILL",
+    "title:SIGTERM",
+  ]);
+});
+
+test("stopActiveChildren drains children registered after shutdown begins", async () => {
+  const events = [];
+  let late;
+  let first = {
+    exited: false,
+    waitForExit: () => new Promise(resolve => { first.resolveExit = resolve; }),
+    kill: signal => events.push(`first:${signal}`),
+  };
+  const draining = stopActiveChildren(() => {
+    if (!late) {
+      first.exited = false;
+      late = {
+        exited: false,
+        waitForExit: () => Promise.resolve(),
+        kill: signal => {
+          events.push(`late:${signal}`);
+          late.exited = true;
+        },
+      };
+      return [first];
+    }
+    return [first, late];
+  }, { grace: 20 });
+  while (!first.resolveExit) await new Promise(resolve => setImmediate(resolve));
+  first.exited = true;
+  first.resolveExit();
+  await draining;
+  assert.deepEqual(events, ["first:SIGTERM", "late:SIGTERM"]);
 });
 
 test("shutdown waits through TERM grace and reaps a Pi child that ignores it", async t => {

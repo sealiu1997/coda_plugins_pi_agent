@@ -12,9 +12,9 @@ import { classifyPiFailure, isPiAuthError, getBase64DecodedSize } from './errors
 import { handleCompactionEvent } from './compaction.mjs';
 import { usageUpdateFromStats } from './usage.mjs';
 import { convertCodaMcpServers } from './coda-mcp.mjs';
-import { titleMaterial, generateTitle, titleChildren } from './titles.mjs';
+import { titleMaterial, generateTitle, titleChildren, beginTitleShutdown } from './titles.mjs';
 import { envForPi } from './pi-env.mjs';
-import { stopChildren } from './shutdown.mjs';
+import { stopActiveChildren } from './shutdown.mjs';
 import { parsePiExtraArgs, extensionPathsFromArgs } from './pi-args.mjs';
 
 const log = (...args) => process.stderr.write(`[pi-agent] ${args.join(' ')}\n`);
@@ -1477,13 +1477,15 @@ let stopping = null;
 async function shutdown({ closeFirst = false } = {}) {
   if (stopping) return stopping;
   stopping = (async () => {
-    const children = [
+    beginTitleShutdown();
+    const activeChildren = () => [
       ...[...sessions.values()].map(session => session.pi).filter(Boolean),
       ...titleChildren(),
     ];
     // End-of-input lets Pi flush and leave on its own. Hold the parent open through the
-    // grace period, then kill a child that has not settled.
-    await stopChildren(children, { grace: TERM_GRACE_MS, closeFirst });
+    // grace period, then kill a child that has not settled. The loop also catches title
+    // children that finish spawning after shutdown starts.
+    await stopActiveChildren(activeChildren, { grace: TERM_GRACE_MS, closeFirst });
     removeMcpFiles();
     process.exit(0);
   })();
