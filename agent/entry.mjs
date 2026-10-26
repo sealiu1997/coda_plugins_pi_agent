@@ -1,10 +1,10 @@
 // Pi Agent entry: speaks ACP to Coda on stdio, spawns `pi --mode rpc` as a child.
 import { randomUUID, createHash } from 'node:crypto';
 import fs, { existsSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from 'node:fs';
-import { join, dirname, isAbsolute, resolve, sep } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readLines } from './lines.mjs';
-import { PiRpc } from './pi-rpc.mjs';
+import { PiRpc, piProcesses } from './pi-rpc.mjs';
 import { findPi, piVersion } from './pi-command.mjs';
 import { PI_MODE, buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue } from './config-options.mjs';
 import { readSessionDefaults, writeSessionDefaults } from './session-defaults.mjs';
@@ -12,6 +12,10 @@ import { classifyPiFailure, isPiAuthError, getBase64DecodedSize } from './errors
 import { handleCompactionEvent } from './compaction.mjs';
 import { usageUpdateFromStats } from './usage.mjs';
 import { convertCodaMcpServers } from './coda-mcp.mjs';
+import { titleMaterial, generateTitle, titleChildren, beginTitleShutdown } from './titles.mjs';
+import { envForPi } from './pi-env.mjs';
+import { stopActiveChildren } from './shutdown.mjs';
+import { parsePiExtraArgs, extensionPathsFromArgs } from './pi-args.mjs';
 
 const log = (...args) => process.stderr.write(`[pi-agent] ${args.join(' ')}\n`);
 
@@ -45,6 +49,8 @@ class SessionState {
     this.extraArgs = [];
     this.ensuring = null;
     this.turn = null; // { resolve, reject, updates, text, cancelled, steered }
+    this.firstPromptBlocks = null; // the session's first user prompt, kept for the title
+    this.titleState = null; // 'pending' | 'running' | 'done': naming the session after its first turn
     this.models = [];
     this.thinkingLevels = [];
     this.currentModelValue = null;
@@ -54,6 +60,7 @@ class SessionState {
     this.defaultModelValue = null;
     this.defaultThinkingLevel = null;
     this.sessionIsNew = false;
+    this.titleState = null;
     this.commands = [];
     this.configOptions = [];
     this.elicitationSupported = false;
@@ -237,28 +244,12 @@ async function spawnPi(session, systemPromptFile, extraArgs = [], mcpServers = {
     args.push('--append-system-prompt', systemPromptFile);
   }
   // Extra CLI args from settings
-  const extraCliArgs = settings['pi.extraArgs'];
-  if (extraCliArgs) {
-    if (Array.isArray(extraCliArgs)) args.push(...extraCliArgs);
-    else if (typeof extraCliArgs === 'string') args.push(...extraCliArgs.split(/\s+/).filter(Boolean));
-  }
+  args.push(...parsePiExtraArgs(settings['pi.extraArgs']));
 
   // Use the machine's own Pi configuration, credentials, extensions and session
   // store as-is (PI_CODING_AGENT_DIR or ~/.pi/agent), so sessions also show up
   // in `pi --resume`.
-  const env = { ...process.env };
-  const nodeDir = dirname(codaNode);
-  let pathVal = env.PATH || '';
-  if (isAbsolute(piCommand)) {
-    const piDir = dirname(piCommand);
-    if (!pathVal.split(':').includes(piDir)) {
-      pathVal = `${piDir}:${pathVal}`;
-    }
-  }
-  if (!pathVal.split(':').includes(nodeDir)) {
-    pathVal = `${nodeDir}:${pathVal}`;
-  }
-  env.PATH = pathVal;
+  const env = envForPi(process.env, piCommand, codaNode);
   // Only the path crosses the process boundary; server arguments and secrets stay in the 0600 file.
   if (session.mcpConfigFile) env.PI_CODA_MCP_FILE = session.mcpConfigFile;
 
@@ -291,6 +282,10 @@ async function spawnPi(session, systemPromptFile, extraArgs = [], mcpServers = {
       session.currentModelValue = modelValue(state.model);
     }
     session.currentThinkingLevel = state.thinkingLevel ?? null;
+    // A session Pi brings back without a name (the ones made before titles, or named by
+    // neither user nor plugin) gets one from its next finished turn; one that has a name
+    // keeps it, whoever gave it.
+    if (session.titleState === null) session.titleState = state.sessionName ? 'done' : 'pending';
     if (session.sessionIsNew && !session.defaultModelValue && !session.defaultThinkingLevel
         && (state.model || state.thinkingLevel)) {
       session.defaultModelValue = session.currentModelValue;
@@ -567,6 +562,45 @@ function finishTurn(session, targetTurn) {
   // The prompt response is on its way to Coda; refresh the meter out of band. A turn that failed late still cost what
   // its earlier model calls and tools did, so it is reported too.
   reportUsage(session);
+  maybeNameSession(session, turn);
+}
+
+// ---- Session title ----
+// Pi never names a session on its own; after the session's first turn that ended well, the
+// plugin asks the model for a short title (agent/titles.mjs) and sets it as the Pi session's
+// name. Pi's session_info_changed then hands it to Coda, the same path a user's /name takes.
+// A failed or cancelled first turn leaves the naming to the next one that ends well.
+async function maybeNameSession(session, turn) {
+  if (session.titleState !== 'pending') return;
+  // A first turn that failed is not what the session is about; a cancelled one often
+  // already said enough to name it, so it counts with its partial text.
+  if (turn.lastStopReason === 'error') return;
+  if (turn.cancelled && !turn.text) return;
+  if (!session.firstPromptBlocks) return;
+  const dialogue = titleMaterial(session.firstPromptBlocks, [{ type: 'text', text: turn.text ?? '' }]);
+  if (!dialogue) return;
+  session.titleState = 'running';
+  const pi = session.pi;
+  try {
+    const model = session.currentModelValue;
+    const extensionPaths = [];
+    if (Object.keys(settings['pi.providers'] ?? {}).length > 0) {
+      extensionPaths.push(join(pluginPath, 'agent', 'providers.mjs'));
+    }
+    extensionPaths.push(...extensionPathsFromArgs(parsePiExtraArgs(settings['pi.extraArgs'])));
+    const title = await generateTitle(piCommand, session.cwd, model, dialogue, {
+      node: codaNode,
+      extensionPaths: [...new Set(extensionPaths)],
+    });
+    if (!title) { session.titleState = 'done'; return; }
+    // Pi may have died or been replaced while the summary child ran; only the live one is named.
+    if (!session.pi || session.pi.exited || session.pi !== pi) { session.titleState = 'done'; return; }
+    await session.pi.send('set_session_name', { name: title }, { timeout: 10000 });
+    session.titleState = 'done';
+  } catch (e) {
+    log(`会话命名失败：${e.message}`);
+    session.titleState = 'done';
+  }
 }
 
 // ---- Tool kind mapping ----
@@ -640,17 +674,10 @@ function handleExtensionUI(session, record) {
   const turn = session.turn;
   const method = record.method;
 
-  // Fire-and-forget methods: just log or map
-  if (['notify', 'setStatus', 'setWidget', 'set_editor_text'].includes(method)) {
-    return;
-  }
-  if (method === 'setTitle') {
-    if (record.title) {
-      notify('session/update', {
-        sessionId: session.sessionId,
-        update: { sessionUpdate: 'session_info_update', title: record.title },
-      });
-    }
+  // Fire-and-forget methods: just log or map. setTitle is an extension naming its terminal
+  // window, not the session; a session's name comes from setSessionName's
+  // session_info_changed, so the title is dropped here.
+  if (['notify', 'setStatus', 'setWidget', 'set_editor_text', 'setTitle'].includes(method)) {
     return;
   }
 
@@ -878,6 +905,7 @@ const methods = {
       const cwd = params.cwd || process.cwd();
       const session = new SessionState(sessionId, cwd);
       session.sessionIsNew = true;
+      session.titleState = 'pending';
 
       // Check elicitation support
       session.elicitationSupported = !!initParams?.clientCapabilities?.elicitation?.form;
@@ -1076,6 +1104,7 @@ const methods = {
         steered: null,
       };
       session.turn = turn;
+      if (!session.firstPromptBlocks) session.firstPromptBlocks = params.prompt ?? null;
 
       (async () => {
         try {
@@ -1438,28 +1467,27 @@ readLines(process.stdin).on('line', async line => {
   } catch (error) {
     refuse(message.id, error.code ?? -32603, error.message, error.data);
   }
-}).on('close', () => {
-  // stdin closed: shut down all pi children
-  for (const [sid, session] of sessions) {
-    if (session.pi) {
-      session.pi.close();
-      session.pi.kill();
-    }
-  }
-  removeMcpFiles();
-  process.exit(0);
-});
+}).on('close', () => { void shutdown({ closeFirst: true }); });
 
 // ---- Lifecycle: SIGTERM/SIGINT ----
-function shutdown() {
-  for (const session of sessions.values()) {
-    if (session.pi && !session.pi.exited) {
-      session.pi.kill('SIGTERM');
-      session.pi.kill('SIGKILL');
-    }
-  }
-  removeMcpFiles();
-  process.exit(0);
+// Pi flushes its session file as it goes, but a kill in the middle of a write can still
+// truncate the last line; give it the same grace the spawn-failure path does before SIGKILL.
+const TERM_GRACE_MS = 500;
+let stopping = null;
+async function shutdown({ closeFirst = false } = {}) {
+  if (stopping) return stopping;
+  stopping = (async () => {
+    beginTitleShutdown();
+    const activeChildren = () => [...piProcesses(), ...titleChildren()];
+    // End-of-input lets Pi flush and leave on its own. Hold the parent open through the
+    // grace period, then kill a child that has not settled. The loop also catches title
+    // children that finish spawning after shutdown starts.
+    await stopActiveChildren(activeChildren, { grace: TERM_GRACE_MS, closeFirst });
+    removeMcpFiles();
+    process.exit(0);
+  })();
+  return stopping;
 }
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+const onSignal = () => { void shutdown(); };
+process.on('SIGTERM', onSignal);
+process.on('SIGINT', onSignal);

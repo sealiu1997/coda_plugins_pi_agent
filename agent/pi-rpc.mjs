@@ -4,6 +4,11 @@ import { readLines } from './lines.mjs';
 import { dirname } from 'node:path';
 
 const log = (...args) => process.stderr.write(`[pi-rpc] ${args.join(' ')}\n`);
+const activeProcesses = new Set();
+
+export function piProcesses() {
+  return [...activeProcesses];
+}
 
 export class PiRpc {
   constructor({ piCommand, args, cwd, env, onEvent, onExtensionUI, onExit }) {
@@ -19,6 +24,7 @@ export class PiRpc {
     this._args = args;
     this._cwd = cwd;
     this._env = env;
+    this._exitPromise = new Promise(resolve => { this._resolveExit = resolve; });
   }
 
   spawn() {
@@ -29,6 +35,7 @@ export class PiRpc {
       detached: false,
     });
     this._child = child;
+    if (child.pid !== undefined) activeProcesses.add(this);
     child.stdin.on('error', () => {});
     child.stderr.on('data', chunk => {
       const text = chunk.toString();
@@ -44,8 +51,13 @@ export class PiRpc {
       this._dispatch(record);
     });
 
-    child.on('close', (code, signal) => {
+    let settled = false;
+    const settleExit = (code, signal) => {
+      if (settled) return;
+      settled = true;
       this._exited = true;
+      activeProcesses.delete(this);
+      this._resolveExit({ code, signal });
       // Fail all pending requests
       for (const [id, entry] of this._pending) {
         clearTimeout(entry.timer);
@@ -53,9 +65,11 @@ export class PiRpc {
       }
       this._pending.clear();
       this._onExit?.(code, signal);
-    });
+    };
+    child.on('close', settleExit);
     child.on('error', err => {
       log('spawn error:', err.message);
+      if (child.pid === undefined) settleExit(null, null);
     });
     return child;
   }
@@ -112,6 +126,7 @@ export class PiRpc {
 
   get exited() { return this._exited; }
   get stderrTail() { return this._stderrTail; }
+  waitForExit() { return this._exitPromise; }
 
   close() {
     if (!this._child || this._exited) return;

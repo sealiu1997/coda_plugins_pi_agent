@@ -50,7 +50,8 @@
 - Pi 的上下文整理（`compaction_start` / `compaction_end` / 摘要重试）映射为 `compaction_update`，失败带原因；Coda 未声明 `session.compaction` 时，失败改为在回复里提示。
 - 每轮结束和恢复会话后，用 Pi 的 `get_session_stats` 发 `usage_update`（上下文已用 / 总量、累计费用，按 USD）；刚整理完、Pi 暂无用量时不发。
 - 文本、图片与资源输入转成 Pi `prompt`；输出按 `agent_settled` 结束一轮。
-- 工具执行、思考流、会话标题与可用命令映射为 `session/update`。
+- 工具执行、思考流与可用命令映射为 `session/update`。
+- 会话自动命名：Pi 自己不给会话起名，插件在会话首个正常结束的一轮后，用该会话同款模型起一个不超过 16 字的标题（独立的 `pi --print --no-session` 子进程，不用工具、不进会话、失败静默），经 `set_session_name` 写进 Pi 会话（`pi --resume` 里可见），并随 `session_info_changed` 报给 Coda；用户在 Pi 里手动命名的会话不被覆盖。
 - `_session/steering` 映射为 Pi `steer`；空闲时返回 `promptRequired`。
 - Pi 扩展的确认、选择和输入请求映射为 ACP 审批或表单。
 - 执行失败按 Coda 协议分类：上报额度耗尽（`quota_exhausted`）与临时服务故障（`service_unavailable`，`input: "accepted"`）；短时限流（rate limit）刻意保留为普通错误，不自动重试。
