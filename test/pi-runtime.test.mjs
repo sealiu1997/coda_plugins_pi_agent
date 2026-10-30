@@ -38,6 +38,11 @@ const managedActual = join(home, '.local/lib/node_modules/@earendil-works/pi-cod
 const managedRealpath = path => path === own ? managedActual : path;
 const noBackup = () => ({ restore() {}, commit() {} });
 const backupName = '.coda-pi-backup-';
+const transactionRecordPath = (stateDir, prefix) => join(
+  stateDir,
+  'pi-runtime-transactions',
+  `${createHash('sha256').update(normalize(prefix)).digest('hex')}.json`,
+);
 
 function packageFixture(t, version = '1.2.0') {
   const root = mkdtempSync(join(tmpdir(), 'pi-runtime-'));
@@ -487,8 +492,7 @@ test('a recorded external npm prefix is recovered after its command was moved aw
   mkdirSync(lock);
   writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 999_999_999 }));
   mkdirSync(transactionDir, { recursive: true });
-  const key = createHash('sha256').update(normalize(fixture.prefix)).digest('hex');
-  const record = join(transactionDir, `${key}.json`);
+  const record = transactionRecordPath(stateDir, fixture.prefix);
   writeFileSync(record, JSON.stringify({
     schemaVersion: 1,
     prefix: fixture.prefix,
@@ -570,18 +574,47 @@ test('setup recovery removes a stale lock even when no backup remains', t => {
   assert.equal(existsSync(lock), false);
 });
 
-test('setup recovery leaves an active update lock and its owner intact', t => {
+test('setup recovery serializes a leftover transaction record before deleting it', t => {
   const fixture = packageFixture(t);
+  const stateDir = join(fixture.root, 'state');
+  const record = transactionRecordPath(stateDir, fixture.prefix);
+  mkdirSync(join(stateDir, 'pi-runtime-transactions'), { recursive: true });
+  writeFileSync(record, JSON.stringify({
+    schemaVersion: 1,
+    prefix: fixture.prefix,
+    backupRoot: '/old/backup',
+  }));
+
+  assert.equal(recoverIdleInstallation(fixture.prefix, {
+    env: { CODA_PLUGIN_STATE: stateDir },
+  }), true);
+  assert.equal(existsSync(record), false);
+});
+
+test('setup recovery leaves an active update lock, owner and record intact', t => {
+  const fixture = packageFixture(t);
+  const stateDir = join(fixture.root, 'state');
   const lock = join(fixture.prefix, '.coda-pi-update.lock');
   const owner = JSON.stringify({ pid: process.pid, token: 'active-update' });
   mkdirSync(lock);
   writeFileSync(join(lock, 'owner.json'), owner);
+  const record = transactionRecordPath(stateDir, fixture.prefix);
+  mkdirSync(join(stateDir, 'pi-runtime-transactions'), { recursive: true });
+  const recordContents = JSON.stringify({
+    schemaVersion: 1,
+    prefix: fixture.prefix,
+    backupRoot: join(fixture.prefix, backupName, 'active'),
+  });
+  writeFileSync(record, recordContents);
 
   assert.throws(
-    () => recoverIdleInstallation(fixture.prefix),
+    () => recoverIdleInstallation(fixture.prefix, {
+      env: { CODA_PLUGIN_STATE: stateDir },
+    }),
     /另一个 Pi 更新正在进行/,
   );
   assert.equal(readFileSync(join(lock, 'owner.json'), 'utf8'), owner);
+  assert.equal(readFileSync(record, 'utf8'), recordContents);
 });
 
 test('updateLatest upgrades the npm installation behind a recognized shell wrapper', t => {

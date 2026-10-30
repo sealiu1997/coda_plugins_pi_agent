@@ -461,10 +461,9 @@ function acquireUpdateLock(prefix, { env = process.env } = {}) {
 // ordinary launch. If another process is still updating, its live pid lock is reported instead.
 export function recoverIdleInstallation(prefix, { env = process.env } = {}) {
   const hasBackups = (interruptedBackups(prefix)?.length ?? 0) > 0;
-  if (!hasBackups && !pathExists(updateLock(prefix))) {
-    forgetTransaction(env, prefix);
-    return false;
-  }
+  const record = transactionRecord(env, prefix);
+  const hasRecord = record && pathExists(record);
+  if (!hasBackups && !pathExists(updateLock(prefix)) && !hasRecord) return false;
   const releaseLock = acquireUpdateLock(prefix, { env });
   releaseLock();
   return true;
