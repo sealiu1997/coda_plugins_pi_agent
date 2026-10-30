@@ -24,7 +24,7 @@ test('loadSession:false in an isolated entry is rejected even when official chec
       assert.equal(error.code, 'ERR_ASSERTION');
       assert.match(error.message, /必须明确验证新进程 session\/load/);
       assert.match(error.actual, /结果：通过/);
-      assert.match(error.actual, /失败 0，跳过 2/);
+      assert.match(error.actual, /失败 0，跳过 1/);
       assert.match(error.actual, /没声明 loadSession/);
       assert.doesNotMatch(error.actual, /新进程 session\/load/);
       return true;

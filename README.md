@@ -4,11 +4,12 @@
 
 ## 要求
 
-- Pi 由插件自动准备：安装或更新插件后，Coda 运行插件的「准备运行环境」（`agent/setup.mjs`）。最低支持的 Pi 为 **1.1.0**；这台机器已有能运行且不低于最低版本的 `pi`（设置里的路径、PATH 或常见目录）就直接用。
-  没有可用的外部 Pi 时，用 Coda 自带的 Node 和 npm 把 `@earendil-works/pi-coding-agent@latest` 装到用户预期的 `~/.local` npm prefix，入口是 `~/.local/bin/pi`。
-  装不上时插件页会写原因并给「重试」；安装后可打开资源页的「Pi 运行时」查看当前版本、npm 最新版，并执行更新。
+- Pi 随本插件安装：`package.json` 精确锁定 `@earendil-works/pi-coding-agent`，Coda 在安装或更新 Pi 插件时，用后端自带的 Node/npm 把依赖装进该插件版本目录。再运行「准备运行环境」确认内置 Pi 能启动。
+  默认会话直接使用这份内置 Pi，不扫描 PATH、Homebrew、nvm 或其他全局安装。这样同一插件版本在每台机器上使用同一个 Pi，也不会改动用户自己的安装。
+- Pi 的默认版本跟插件版本绑定。更新 Pi 就是更新 Pi 插件；新启动的会话使用新插件目录里的 Pi，已在运行的会话继续使用启动时的版本。
+- 最低支持 Pi **1.1.0**，当前插件内置并验证 **1.4.0**。如果显式设置 `pi.commandPath` 指向外部 Pi，插件只验证它能否运行以及是否达到最低版本，不会安装或升级它。
 - 还要在 Coda 里添加 provider（见下），或在 pi 里完成登录。
-- Node 由 Coda 提供（`$CODA_NODE`），插件运行时没有 npm 依赖；开发检查器是锁定版本的 devDependency。
+- Node 由 Coda 提供（`$CODA_NODE`）。插件运行时依赖随插件安装；开发检查器是锁定版本的 devDependency。
 - 直接使用本机 Pi 的配置、登录、扩展与会话目录（`$PI_CODING_AGENT_DIR`，默认 `~/.pi/agent`），插件不复制也不改写它们；Coda 里开的会话也能在 `pi --resume` 里看到。
 
 ## 安装
@@ -23,7 +24,7 @@
 
 | 设置 | 默认值 | 说明 |
 | --- | --- | --- |
-| `pi.commandPath` | `pi` | `pi` 可执行文件路径；留为 `pi` 时依次检查 PATH、`~/.npm-global/bin`、`/opt/homebrew/bin`、`/usr/local/bin`、`~/.local/bin`、`~/.bun/bin`，最后兼容旧版插件留下的自管副本。显式填写的路径始终优先；准备运行环境不会覆盖它，可在资源页的「Pi 运行时」检查并更新可识别的 npm 安装。 |
+| `pi.commandPath` | `pi` | 留为 `pi` 时使用插件目录内锁定版本；填其他命令或绝对路径时，显式改用你自行管理的 Pi。插件不会扫描 PATH 替默认值，也不会安装或升级这个外部 Pi。 |
 | `pi.extraArgs` | 空 | 追加到 `pi --mode rpc` 的额外 CLI 参数。 |
 | `pi.providers` | 无 | 一行一个 provider：地址、Key（密文）、协议、推理、上下文长度、最大输出。行名就是 Pi 里的 provider 名（不能带 `/`）。 |
 
@@ -75,21 +76,21 @@ Node ≥24。先 `npm ci --ignore-scripts`，再运行：
 | `npm test` | 单元测试与无需登录、无需真实模型的 fake Pi 端到端测试 |
 | `npm run check:coda` | 官方 checker 0.5.8 清单检查与 fake Pi 握手 |
 | `npm run check:fake-live` | 官方 `coda-plugin-check --live` 驱动真实插件入口，覆盖系统指令、回合、取消、插话、恢复与关闭 |
-| `npm run check:pi` | 扫描本机 Pi 安装包，核对 CLI/RPC/事件/扩展 API、能力新增与 changelog |
-| `npm run check:pi:verified` | 临时从 npm 安装固定 Pi 1.1.0 后扫描，不改全局安装 |
+| `npm run check:pi` | 扫描插件依赖中锁定的 Pi，核对 CLI/RPC/事件/扩展 API、能力新增与 changelog |
+| `npm run check:pi:verified` | 与 `check:pi` 相同；CI 用它确认锁定的 Pi 已验证 |
 | `npm run probe:upstream` | 手动运行独立的 latest 探测，报告写入 `compat-reports/` |
 | `npm run check:real-live` | **人工选择运行**：对本机真实 Pi 执行官方 live 检查，可能需要登录并消耗模型额度 |
 
 Coda 通用协议只复用官方 `@coda-console/plugin-check`，精确版本 **0.5.8** 与传递依赖写在 `package-lock.json`。不再维护另一套 Coda 协议扫描或协议基线。
 `check:coda` 的握手和 fake live 在临时插件副本中运行原始 `agent/` 文件，只把清单默认 `pi.commandPath` 指向 fake 可执行文件；不改你的设置或 Pi 配置。fake 也模拟 `--version`、`--help`、系统提示词文件与标题进程，且断言取消和轮中插话实际发生，跳过场景不能当作通过。
 
-普通 PR / main CI 只跑 lockfile 中的官方 checker 和已验证 Pi 固定候选。每日的 `Upstream compatibility advisory` workflow（也可手动发起）单独探测两个上游的 latest；上游变化或检查失败使这个独立任务告警，不进入普通 PR 的稳定检查。任务只给 `contents: read`，不使用 secrets，也不发布。
+普通 PR / main CI 只跑 lockfile 中的官方 checker 和插件锁定的 Pi。每日的 `Upstream compatibility advisory` workflow（也可手动发起）单独探测两个上游的 latest；上游变化或检查失败使这个独立任务告警，不进入普通 PR 的稳定检查。任务只给 `contents: read`，不使用 secrets，也不发布。
 它在 job summary 和 artifact 中保存版本与提交、官方 checker 结果、Pi JSON 报告，以及从固定 checker 发布提交到最新发布提交、上游 main 的 `docs/agent-protocol.md` diff 与相关提交列表。artifact 默认保留 30 天；新协议需人工判断插件是否需要接入，再提交固定版本和快照更新。
 
 Pi 扫描器用法与退出码见 [compat/NOTES.md](compat/NOTES.md)。无 `--accept` 时始终只读仓库基线；候选快照在 JSON 报告里。接受前检查完整报告与 changelog：
 
 ```sh
-node scripts/check-pi-compat.mjs --install 1.1.0 --json
+node scripts/check-pi-compat.mjs --json
 node scripts/check-pi-compat.mjs --pi /absolute/path/to/pi --json
 # 完成人工评估后显式更新基线：
 node scripts/check-pi-compat.mjs --accept
@@ -97,20 +98,8 @@ node scripts/check-pi-compat.mjs --accept
 
 ## Pi 运行时管理
 
-插件安装时默认把 Pi latest 安装到 `~/.local/bin/pi`。已有可用 Pi 时沿用当前安装，不会因为安装或更新插件而擅自改变用户已有的版本。
+这与 Coda 官方 Claude SDK、Codex 插件的做法一致：运行时是插件的精确 npm 依赖，在插件设置页点「检查更新」检查 Pi 插件。新版本会先安装它自己的依赖，再从新启动的会话运行；没有单独的全局 Pi 升级按钮，也不会修改 PATH 上已有 `pi`。
 
-资源页的「Pi 运行时」面板显示当前路径、当前版本和 npm latest，并提供「安装最新版」或「更新到最新版」按钮：
+维护者升级内置 Pi 的步骤是：修改 `package.json` 的精确依赖并更新根 `package-lock.json`，运行固定版本兼容扫描和 fake live；没有阻塞后升级本插件版本并发布。用户更新 Pi 插件即可得到新运行时。
 
-- 插件自己安装的 `~/.local` 副本，直接更新该 prefix。
-- `/opt/homebrew/lib/node_modules`、nvm 或其他标准 npm global 布局中的 Pi，用对应 prefix 更新。
-- 项目本地、Bun、独立下载或无法识别安装来源的 Pi 不会被覆盖；面板会提示改用原安装工具，或在 `pi.commandPath` 中改指 npm 安装的 Pi。
-- 更新不会主动结束正在运行的 Coda 会话；新版本从之后启动的 Pi 进程生效。
-
-命令行检查和更新使用同一套逻辑：
-
-```sh
-npm run pi:status
-npm run pi:update
-```
-
-`agent/pi-install/` 中固定的 1.1.0 依赖图继续供兼容扫描器构造可重复的基线安装；生产 setup 默认安装 latest，Coda 插件自身版本仍由插件商店的检查更新机制管理。每日 upstream advisory 会检查 Pi latest 的接口变化，普通稳定 CI 不会因为上游半夜发版而突然失败。
+需要继续使用自己安装或固定版本的 Pi 时，把 `pi.commandPath` 填成其实际命令或绝对路径。该覆盖项优先于插件内置运行时，版本检查和升级由用户自己的安装工具负责。

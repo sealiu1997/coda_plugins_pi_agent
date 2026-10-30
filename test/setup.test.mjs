@@ -1,180 +1,127 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import {
-  findPi, legacyManagedPi, managedPi, managedPrefix, PACKAGE, VERIFIED_PI_VERSION
+  MANAGED_PI_CLI,
+  PACKAGE,
+  VERIFIED_PI_VERSION,
+  launchLabel,
+  resolvePiLaunch,
 } from '../agent/pi-command.mjs';
 import { setup } from '../agent/setup.mjs';
 
-const home = '/home/me';
-const state = '/state/pi-plugin';
-const own = join(home, '.local/bin/pi');
+const pluginPath = '/plugin/pi';
+const node = '/coda/node/bin/node';
+const managedCli = resolve(pluginPath, MANAGED_PI_CLI);
 
-function machine(versions = {}, updateResult = { version: '1.4.0', path: own, installed: true }) {
-  const ran = [], said = [], updates = [];
-  const run = (command, args) => {
-    ran.push([command, ...args]);
-    return versions[command]?.() ?? { status: null, error: new Error('ENOENT') };
-  };
+function machine(version = '1.4.0') {
+  const ran = [], said = [];
   return {
-    ran, said, updates,
+    ran,
+    said,
     options: {
-      node: '/coda/node/bin/node', run, update: options => {
-        updates.push(options);
-        if (updateResult instanceof Error) throw updateResult;
-        return updateResult;
+      node,
+      run: (command, args) => {
+        ran.push([command, ...args]);
+        return version instanceof Error
+          ? { status: 1, stderr: version.message }
+          : { status: 0, stdout: `${version}\n` };
       },
-      realpath: path => path === own
-        ? join(home, '.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js')
-        : path,
       say: line => said.push(line),
-      fail: line => said.push(`! ${line}`)
-    }
+      fail: line => said.push(`! ${line}`),
+    },
   };
 }
 
-test('Pi lookup uses Coda settings, PATH, common installs, the managed ~/.local copy, then the legacy state copy', () => {
-  const find = (settings, usable) => findPi(settings, {
-    env: { PATH: '/a:/b', CODA_PLUGIN_STATE: state }, home, usable: path => usable.includes(path)
+test('the default launch is the exact Pi installed inside the Coda plugin', () => {
+  const launch = resolvePiLaunch({}, { pluginPath, node });
+  assert.deepEqual(launch, {
+    command: node,
+    prefixArgs: [managedCli],
+    cliPath: managedCli,
+    kind: 'managed',
   });
-  assert.equal(find({ 'pi.commandPath': '/opt/pi' }, []), '/opt/pi');
-  assert.equal(find({}, ['/b/pi', own]), '/b/pi');
-  assert.equal(find({ 'pi.commandPath': 'pi' }, [own, legacyManagedPi({ CODA_PLUGIN_STATE: state })]), own);
-  assert.equal(find({}, [legacyManagedPi({ CODA_PLUGIN_STATE: state })]), legacyManagedPi({ CODA_PLUGIN_STATE: state }));
-  assert.equal(find({}, []), 'pi');
+  assert.equal(launchLabel(launch), managedCli);
 });
 
-test('the managed runtime is a normal npm prefix at ~/.local, with a state-installed legacy path still discoverable', () => {
-  assert.equal(managedPrefix({}, home), join(home, '.local'));
-  assert.equal(managedPrefix({ CODA_PI_PREFIX: '/managed' }, home), '/managed');
-  assert.equal(managedPi({}, home), own);
-  assert.equal(legacyManagedPi({ CODA_PLUGIN_STATE: state }), join(state, 'pi/node_modules/.bin/pi'));
+test('a PATH pi never overrides the plugin-managed runtime', () => {
+  const launch = resolvePiLaunch(
+    { 'pi.commandPath': 'pi' },
+    { pluginPath, node, env: { PATH: '/usr/local/bin:/opt/homebrew/bin' } },
+  );
+  assert.equal(launch.kind, 'managed');
+  assert.equal(launch.command, node);
+  assert.deepEqual(launch.prefixArgs, [managedCli]);
 });
 
-test('a pi file on PATH that cannot run is skipped', async t => {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-path-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const brokenDir = join(dir, 'broken'), workingDir = join(dir, 'working');
-  await mkdir(brokenDir);
-  await mkdir(workingDir);
-  const broken = join(brokenDir, 'pi'), working = join(workingDir, 'pi');
-  await writeFile(broken, '#!/bin/sh\n');
-  await writeFile(working, '#!/bin/sh\necho 1.2.3\n');
-  await chmod(working, 0o755);
-  assert.equal(findPi({}, { env: { PATH: `${brokenDir}:${workingDir}` }, home: dir }), working);
+test('an explicit non-pi commandPath remains the external override', () => {
+  assert.deepEqual(
+    resolvePiLaunch({ 'pi.commandPath': '/custom/bin/pi' }, { pluginPath, node }),
+    { command: '/custom/bin/pi', prefixArgs: [], kind: 'external' },
+  );
 });
 
-test('an existing usable Pi is kept and never invokes the installer', () => {
-  const m = machine({ '/usr/local/bin/pi': () => ({ status: 0, stdout: 'pi 1.4.0\n' }) });
-  assert.equal(setup({ env: { PATH: '/usr/bin' }, home, ...m.options, find: () => '/usr/local/bin/pi' }), 0);
-  assert.deepEqual(m.ran, [['/usr/local/bin/pi', '--version']]);
-  assert.equal(m.updates.length, 0);
-  assert.deepEqual(m.said, ['已有 Pi 1.4.0：/usr/local/bin/pi']);
+test('setup runs the selected Pi through CODA_NODE and reports the managed version', () => {
+  const m = machine('1.4.0');
+  const env = { CODA_PLUGIN_PATH: pluginPath };
+  assert.equal(setup({ env, ...m.options }), 0);
+  assert.deepEqual(m.ran, [[node, managedCli, '--version']]);
+  assert.deepEqual(m.said, [`Pi 1.4.0 可用：${managedCli}`]);
 });
 
-test('a missing Pi installs npm latest into the managed ~/.local prefix', () => {
-  const m = machine();
-  assert.equal(setup({ env: {}, home, ...m.options, find: () => 'pi' }), 0);
-  assert.equal(m.ran.length, 0, 'the finder already established that no Pi exists');
-  assert.equal(m.updates.length, 1);
-  assert.equal(m.said[0], `安装 Pi latest 到 ${own}`);
-  assert.equal(m.said.at(-1), `已安装 Pi 1.4.0：${own}`);
+test('setup verifies but does not replace an explicitly configured external Pi', () => {
+  const m = machine('1.4.0');
+  const env = {
+    CODA_PLUGIN_PATH: pluginPath,
+    CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.commandPath': '/custom/bin/pi' }),
+  };
+  assert.equal(setup({ env, ...m.options }), 0);
+  assert.deepEqual(m.ran, [['/custom/bin/pi', '--version']]);
+  assert.deepEqual(m.said, ['Pi 1.4.0 可用：/custom/bin/pi']);
 });
 
-test('an old or broken external Pi is reported and left untouched', () => {
-  for (const answer of [{ status: 0, stdout: '1.0.9\n' }, { status: 1 }]) {
-    const m = machine({ '/usr/local/bin/pi': () => answer });
-    assert.equal(setup({ env: {}, home, ...m.options, find: () => '/usr/local/bin/pi' }), 1);
-    assert.equal(m.updates.length, 0);
-    assert.deepEqual(m.ran, [['/usr/local/bin/pi', '--version']]);
-  }
+test('setup rejects a missing or old runtime with plugin-update guidance', () => {
+  const managed = machine(new Error('ENOENT'));
+  assert.equal(setup({ env: { CODA_PLUGIN_PATH: pluginPath }, ...managed.options }), 1);
+  assert.match(managed.said.at(-1), /更新或重新安装 Pi 插件/);
+
+  const old = machine('1.0.0');
+  const env = {
+    CODA_PLUGIN_PATH: pluginPath,
+    CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.commandPath': '/custom/bin/pi' }),
+  };
+  assert.equal(setup({ env, ...old.options }), 1);
+  assert.match(old.said.at(-1), /最低版本 1\.1\.0.*原安装方式/);
+  assert.doesNotMatch(old.said.at(-1), /npm i -g|资源页/);
 });
 
-test('an explicitly pinned managed path is never overwritten by setup', () => {
-  const broken = machine({});
-  const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.commandPath': own }) };
-  assert.equal(setup({ env, home, ...broken.options, find: () => own }), 1);
-  assert.equal(broken.updates.length, 0);
-});
-
-test('managed copies below the minimum are replaced with latest, while an explicit upgrade updates a usable managed copy', () => {
-  const old = machine({ [own]: () => ({ status: 0, stdout: '1.0.9\n' }) });
-  assert.equal(setup({ env: {}, home, ...old.options, find: () => own }), 0);
-  assert.equal(old.updates.length, 1);
-
-  const current = machine({ [own]: () => ({ status: 0, stdout: '1.1.0\n' }) });
-  assert.equal(setup({ env: {}, home, ...current.options, find: () => own, upgradeLatest: true }), 0);
-  assert.equal(current.updates.length, 1);
-});
-
-test('a custom executable at the managed path is external and never overwritten', () => {
-  const current = machine({ [own]: () => ({ status: 0, stdout: '1.4.0\n' }) });
-  const options = { ...current.options, realpath: path => path };
-  assert.equal(setup({ env: {}, home, ...options, find: () => own, upgradeLatest: true }), 0);
-  assert.equal(current.updates.length, 0);
-  assert.deepEqual(current.said, [`已有 Pi 1.4.0：${own}`]);
-
-  for (const answer of [{ status: 0, stdout: '1.0.9\n' }, { status: 1 }]) {
-    const external = machine({ [own]: () => answer });
-    assert.equal(setup({ env: {}, home, ...external.options, realpath: path => path, find: () => own }), 1);
-    assert.equal(external.updates.length, 0);
-  }
-});
-
-test('an explicit latest request preserves usable external Pi and configured paths', () => {
-  const external = machine({ '/external/pi': () => ({ status: 0, stdout: '1.2.0\n' }) });
-  assert.equal(setup({ env: {}, home, ...external.options, find: () => '/external/pi', upgradeLatest: true }), 0);
-  assert.equal(external.updates.length, 0);
-
-  const configured = machine({ '/external/pi': () => ({ status: 0, stdout: '1.4.0\n' }) });
-  const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.commandPath': '/external/pi' }) };
-  assert.equal(setup({ env, home, ...configured.options, upgradeLatest: true }), 0);
-  assert.equal(configured.updates.length, 0);
-});
-
-test('installer failures are the last setup line', () => {
-  const m = machine({}, new Error('network unavailable'));
-  assert.equal(setup({ env: {}, home, ...m.options, find: () => 'pi' }), 1);
-  assert.match(m.said.at(-1), /^! 安装 Pi 失败：network unavailable/);
-});
-
-test('minimum, verified scanner, baseline and Coda runtime panel agree', async () => {
-  const { MIN_PI_VERSION } = await import('../agent/pi-command.mjs');
-  const baseline = JSON.parse(await readFile(new URL('../compat/pi-snapshot.json', import.meta.url)));
-  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url)));
-  assert.equal(MIN_PI_VERSION, VERIFIED_PI_VERSION);
-  assert.equal(baseline.version, MIN_PI_VERSION);
-  assert.equal(baseline.reviewed, true);
-  assert.equal(manifest.scripts['check:pi:verified'], `node scripts/check-pi-compat.mjs --install ${VERIFIED_PI_VERSION}`);
-  assert.equal(manifest.devDependencies['@coda-console/plugin-check'], '0.5.8');
-  assert.equal(manifest.contributes.panels[0].actions['update-latest'].command,
-    'exec "$CODA_NODE" "$CODA_PLUGIN_PATH/agent/pi-runtime-action.mjs"');
-  assert.equal(manifest.contributes.panels[0].command,
-    'exec "$CODA_NODE" "$CODA_PLUGIN_PATH/agent/pi-runtime-panel.mjs"');
-  assert.equal(manifest.contributes.setup.command, 'exec "$CODA_NODE" "$CODA_PLUGIN_PATH/agent/setup.mjs"');
-});
-
-test('bundled exact npm graph remains available to the compatibility scanner', async t => {
-  const { prepareRuntime } = await import('../agent/pi-install.mjs');
-  const manifest = JSON.parse(await readFile(new URL('../agent/pi-install/package.json', import.meta.url)));
-  const lock = JSON.parse(await readFile(new URL('../agent/pi-install/package-lock.json', import.meta.url)));
+test('manifest updates Pi through the regular Coda plugin update path', async () => {
+  const root = resolve(import.meta.dirname, '..');
+  const manifest = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
+  const lock = JSON.parse(await readFile(resolve(root, 'package-lock.json'), 'utf8'));
+  assert.equal(manifest.version, '0.5.0');
   assert.equal(manifest.dependencies[PACKAGE], VERIFIED_PI_VERSION);
+  assert.equal(lock.packages[''].version, '0.5.0');
   assert.equal(lock.packages[''].dependencies[PACKAGE], VERIFIED_PI_VERSION);
-  for (const [name, version] of Object.entries(manifest.overrides)) {
-    assert.equal(version, VERIFIED_PI_VERSION);
-    assert.equal(lock.packages[`node_modules/${name}`].version, version);
-  }
-  const dir = await mkdtemp(join(tmpdir(), 'pi-prepare-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  prepareRuntime(dir);
-  assert.equal(JSON.parse(await readFile(join(dir, 'package-lock.json'))).lockfileVersion, 3);
+  assert.equal(lock.packages[`node_modules/${PACKAGE}`].version, VERIFIED_PI_VERSION);
+  assert.equal(manifest.contributes.panels, undefined);
+  assert.equal(manifest.contributes.setup.command,
+    'exec "$CODA_NODE" "$CODA_PLUGIN_PATH/agent/setup.mjs"');
+  assert.equal(manifest.scripts['check:pi:verified'], 'node scripts/check-pi-compat.mjs');
+  assert.doesNotMatch(manifest.contributes.configuration.properties['pi.commandPath'].description, /资源页|扫描 PATH|常见安装目录/);
 });
 
-test('a legacy managed copy stays usable during migration', async () => {
-  const legacy = legacyManagedPi({ CODA_PLUGIN_STATE: state });
-  const m = machine({ [legacy]: () => ({ status: 0, stdout: '1.1.0\n' }) });
-  assert.equal(setup({ env: { CODA_PLUGIN_STATE: state }, home, ...m.options, find: () => legacy }), 0);
-  assert.equal(m.updates.length, 0);
+test('obsolete runtime-management files and nested install graph are absent', async () => {
+  const root = resolve(import.meta.dirname, '..');
+  for (const path of [
+    'agent/pi-runtime.mjs',
+    'agent/pi-runtime-panel.mjs',
+    'agent/pi-runtime-action.mjs',
+    'agent/pi-install.mjs',
+    'agent/pi-install/package.json',
+    'agent/pi-install/package-lock.json',
+  ]) {
+    await assert.rejects(stat(resolve(root, path)), error => error.code === 'ENOENT');
+  }
 });

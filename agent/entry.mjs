@@ -5,7 +5,7 @@ import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readLines } from './lines.mjs';
 import { PiRpc, piProcesses } from './pi-rpc.mjs';
-import { findPi, piVersion, assertPiVersion } from './pi-command.mjs';
+import { resolvePiLaunch, piVersion, assertPiVersion } from './pi-command.mjs';
 import { PI_MODE, buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue } from './config-options.mjs';
 import { readSessionDefaults, writeSessionDefaults } from './session-defaults.mjs';
 import { classifyPiFailure, isPiAuthError, getBase64DecodedSize } from './errors.mjs';
@@ -70,8 +70,9 @@ class SessionState {
   }
 }
 
-// Where Pi is: a path set in Coda, the PATH, the usual directories, else the copy setup installed (agent/pi-command.mjs).
-const piCommand = findPi(settings);
+// Pi is the exact npm dependency installed with this plugin. pi.commandPath may explicitly
+// override it with an externally managed executable; PATH never changes the default.
+const piCommand = resolvePiLaunch(settings, { pluginPath, node: codaNode });
 
 // Refuse unsupported or unknown Pi versions before opening any session.
 const getPiVersion = async () => assertPiVersion(await piVersion(piCommand), piCommand);

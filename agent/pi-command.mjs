@@ -1,14 +1,14 @@
-// Where Pi is on this machine, as the agent starts it and as its setup looks for it: the path set in Coda
-// (`pi.commandPath`), else the PATH, else the usual install directories, else the copy this plugin's setup installed in
-// its own state (`agent/setup.mjs`). A Pi the machine has of its own is always taken before that copy.
-import { execFile } from 'node:child_process';
-import { accessSync, constants, statSync } from 'node:fs';
+// Resolve which Pi runs. By default this plugin runs the exact Pi package installed with
+// the plugin by Coda. An explicit non-"pi" pi.commandPath remains an escape hatch for an
+// externally managed Pi, without PATH or common install directories silently overriding it.
+import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { homedir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { resolve } from 'node:path';
 
+export const PACKAGE = '@earendil-works/pi-coding-agent';
 export const MIN_PI_VERSION = '1.1.0';
-export const VERIFIED_PI_VERSION = MIN_PI_VERSION;
+export const VERIFIED_PI_VERSION = '1.4.0';
+export const MANAGED_PI_CLI = 'node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js';
 
 export const parsePiVersion = output => {
   const match = String(output ?? '').match(/\bv?(\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?)\b/);
@@ -25,56 +25,89 @@ export function supportedVersion(version) {
   }
   return true;
 }
-export function assertPiVersion(version, command) {
-  if (!supportedVersion(version)) throw new Error(`Pi ${version ?? '版本未知'}（${command}）不满足最低版本 ${MIN_PI_VERSION}。请在 Pi 运行时的“更新到最新版”里升级，或执行 npm i -g ${PACKAGE}@latest；也可以将 pi.commandPath 改回 pi 后重新准备运行环境。`);
-  return version;
+
+export function normalizePiLaunch(value) {
+  if (value && typeof value === 'object' && typeof value.command === 'string') {
+    return {
+      command: value.command,
+      prefixArgs: Array.isArray(value.prefixArgs) ? value.prefixArgs.map(String) : [],
+      ...(value.cliPath ? { cliPath: String(value.cliPath) } : {}),
+      kind: value.kind === 'external' ? 'external' : 'managed',
+    };
+  }
+  return { command: String(value), prefixArgs: [], kind: 'external' };
 }
 
-export const PACKAGE = '@earendil-works/pi-coding-agent';
+export function launchLabel(value) {
+  const launch = normalizePiLaunch(value);
+  return launch.cliPath ?? (launch.prefixArgs.length ? `${launch.command} ${launch.prefixArgs.join(' ')}` : launch.command);
+}
 
-// The npm prefix setup owns: the user's expected ~/.local/bin, overridable for tests and managed hosts.
-export const managedPrefix = (env = process.env, home = homedir()) => env.CODA_PI_PREFIX || join(home, '.local');
+export function launchArgs(value, args = []) {
+  const launch = normalizePiLaunch(value);
+  return [...launch.prefixArgs, ...args];
+}
 
-// The Pi this plugin installed itself: where the agent looks for it here and where setup installs and repairs it.
-export const managedPi = (env = process.env, home = homedir()) => join(managedPrefix(env, home), 'bin', 'pi');
-
-// Versions before 0.4 installed under the plugin state; keep finding them during migration.
-export const legacyManagedPi = (env = process.env) => env.CODA_PLUGIN_STATE ? join(env.CODA_PLUGIN_STATE, 'pi', 'node_modules', '.bin', 'pi') : null;
-
-const isExecutableFile = path => {
-  try {
-    if (!statSync(path).isFile()) return false;
-    accessSync(path, constants.X_OK);
-    return true;
-  } catch {
-    return false;
+// Resolve the launch description once at agent startup. "pi" and an empty value mean the
+// plugin-managed package; every other configured value is an explicit external override.
+export function resolvePiLaunch(settings = {}, {
+  pluginPath = process.env.CODA_PLUGIN_PATH || '.',
+  node = process.env.CODA_NODE || process.execPath,
+} = {}) {
+  const configured = typeof settings?.['pi.commandPath'] === 'string'
+    ? settings['pi.commandPath'].trim()
+    : '';
+  if (configured && configured !== 'pi') {
+    return { command: configured, prefixArgs: [], kind: 'external' };
   }
-};
+  const cliPath = resolve(pluginPath, MANAGED_PI_CLI);
+  return { command: node, prefixArgs: [cliPath], cliPath, kind: 'managed' };
+}
 
-export function findPi(settings, { env = process.env, home = homedir(), usable = isExecutableFile } = {}) {
-  const configured = settings['pi.commandPath'];
-  if (configured && configured !== 'pi') return configured;
-  const onPath = (env.PATH ?? '').split(delimiter).filter(Boolean).map(dir => join(dir, 'pi')).find(usable);
-  if (onPath) return onPath;
-  const own = managedPi(env, home);
-  return [join(home, '.npm-global/bin/pi'), '/opt/homebrew/bin/pi', '/usr/local/bin/pi', join(home, '.local/bin/pi'), join(home, '.bun/bin/pi'),
-    ...(own ? [own, legacyManagedPi(env)] : [])].find(usable) ?? 'pi';
+export function assertPiVersion(version, launch) {
+  if (!supportedVersion(version)) {
+    const normalized = normalizePiLaunch(launch);
+    const guidance = normalized.kind === 'managed'
+      ? '请更新或重新安装 Pi 插件，再在插件页重试准备运行环境'
+      : '请用原安装方式升级这个 Pi，或把 pi.commandPath 改回 pi 以使用插件内置运行时';
+    throw new Error(`Pi ${version ?? '版本未知'}（${launchLabel(normalized)}）不满足最低版本 ${MIN_PI_VERSION}。${guidance}。`);
+  }
+  return version;
 }
 
 const runFile = promisify(execFile);
 
-// The version a Pi reports (`pi --version` prints e.g. 1.1.0), cached per command. `fallback` stands in
-// (its result is not cached) when the binary cannot be run, so callers never wait or throw on this.
+const versionKey = launch => JSON.stringify([
+  normalizePiLaunch(launch).command,
+  normalizePiLaunch(launch).prefixArgs,
+]);
+
+// The version a Pi reports (`pi --version` prints e.g. 1.4.0), cached per launch. The
+// fallback stands in when the runtime cannot run, so callers never wait or throw here.
 const versionCache = new Map();
 export async function piVersion(piCommand, { timeout = 5000, fallback = null } = {}) {
-  if (!versionCache.has(piCommand)) {
+  const launch = normalizePiLaunch(piCommand);
+  const key = versionKey(launch);
+  if (!versionCache.has(key)) {
     try {
-      const { stdout } = await runFile(piCommand, ['--version'], { timeout });
-      versionCache.set(piCommand, parsePiVersion(stdout));
-    } catch (e) {
-      process.stderr.write(`[pi-agent] pi --version failed: ${e.message}\n`);
-      versionCache.set(piCommand, null);
+      const { stdout, stderr } = await runFile(launch.command, launchArgs(launch, ['--version']), { timeout });
+      versionCache.set(key, parsePiVersion(`${stdout ?? ''}\n${stderr ?? ''}`));
+    } catch (error) {
+      process.stderr.write(`[pi-agent] Pi --version failed: ${error.message}\n`);
+      versionCache.set(key, null);
     }
   }
-  return versionCache.get(piCommand) ?? (fallback ? await fallback() : null);
+  return versionCache.get(key) ?? (fallback ? await fallback() : null);
+}
+
+export function versionOf(piCommand, { env = process.env, run = spawnSync, timeout = 5_000 } = {}) {
+  const launch = normalizePiLaunch(piCommand);
+  const result = run(launch.command, launchArgs(launch, ['--version']), {
+    encoding: 'utf8',
+    timeout,
+    env,
+  });
+  return result.status === 0
+    ? parsePiVersion(`${result.stdout ?? ''}\n${result.stderr ?? ''}`)
+    : null;
 }

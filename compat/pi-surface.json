@@ -194,7 +194,6 @@
       {
         "name": "--version",
         "sources": [
-          "agent/pi-runtime.mjs",
           "agent/pi-command.mjs"
         ],
         "takesValue": false

@@ -23,9 +23,8 @@ test('surface entries have real source evidence; every literal RPC send and CLI 
   for (const [file, text] of Object.entries(source)) {
     const code = uncomment(file === 'agent/setup.mjs' ? text.slice(0,text.indexOf('  const npm =')) : text);
     for (const m of code.matchAll(/\.send\(['"]([^'"]+)['"]/g)) assert.ok(surface.dependencies.commands.some(d => d.name === m[1] && d.sources.includes(file)), `${file}: ${m[1]}`);
-    // These lifecycle scripts have their own flags; only pi-runtime's --version call reaches Pi.
-    if (file === 'agent/pi-runtime.mjs') assert.match(code, /run\(command, \['--version'\]/);
-    else if (file === 'agent/setup.mjs') assert.match(code, /versionOf\(found/);
+    // Setup has no runtime lifecycle flags; its version check is centralized in pi-command.
+    if (file === 'agent/setup.mjs') assert.match(code, /versionOf\(launch/);
     else for (const m of code.matchAll(/['"](--[\w-]+=?|-e=?)['"]/g)) assert.ok(surface.dependencies.cli.some(d => d.name === m[1] && d.sources.includes(file)), `${file}: ${m[1]}`);
     for (const m of code.matchAll(/pi\.(register\w+)\(/g)) assert.ok(surface.dependencies.extensionApi.some(d => d.name === m[1] && d.sources.includes(file)));
   }
@@ -145,9 +144,14 @@ function fakeChild({hang = false, ignoreTerm = false, exitEarly = false, fail = 
 
 test('probe sends only five fixed getters, uses isolated config/cwd and strips credentials', async t => {
   const dir = temporary(t), child = fakeChild(); let options, args;
-  const results = await probe('/fake/pi',join(dir,'probe'),{spawnFn:(_,a,o) => {args=a;options=o;return child;},env:{PATH:'/bin',OPENAI_API_KEY:'never-forward',PI_CODING_AGENT_DIR:'/real',PI_CODING_AGENT_SESSION_DIR:'/real'}});
+  const results = await probe('/fake/node',join(dir,'probe'),{
+    prefixArgs:['/plugin/pi/dist/bundle/cli.js'],
+    spawnFn:(_,a,o) => {args=a;options=o;return child;},
+    env:{PATH:'/bin',OPENAI_API_KEY:'never-forward',PI_CODING_AGENT_DIR:'/real',PI_CODING_AGENT_SESSION_DIR:'/real'},
+  });
   assert.equal(Object.keys(results).length,5);
   assert.deepEqual(child.requests.map(r=>r.type),['get_state','get_commands','get_available_models','get_available_thinking_levels','get_session_stats']);
+  assert.equal(args[0],'/plugin/pi/dist/bundle/cli.js');
   assert.ok(args.includes('--no-mcp')); assert.equal(options.env.PI_OFFLINE,'1'); assert.equal(options.env.PI_TELEMETRY,'0');
   assert.equal(options.env.OPENAI_API_KEY,undefined); assert.equal(options.env.HOME,options.cwd); assert.equal(options.env.PI_CODING_AGENT_DIR,options.cwd);
   assert.deepEqual(child.signals,['SIGTERM']);

@@ -5,8 +5,12 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { findPi, PACKAGE, VERIFIED_PI_VERSION, parsePiVersion } from '../agent/pi-command.mjs';
-import { prepareRuntime } from '../agent/pi-install.mjs';
+import {
+  PACKAGE,
+  launchArgs,
+  parsePiVersion,
+  resolvePiLaunch,
+} from '../agent/pi-command.mjs';
 import { ProcessScope, minimalEnv } from './process-scope.mjs';
 
 export const PROBE_COMMANDS = ['get_state', 'get_commands', 'get_available_models', 'get_available_thinking_levels', 'get_session_stats'];
@@ -43,9 +47,11 @@ export function declarations(files) {
   const db = new Map();
   for (const [file, raw] of Object.entries(files)) {
     const text = clean(raw);
-    for (const m of text.matchAll(/\b(interface|type)\s+(\w+)(?:<[^;{}]*?>)?\s*(?:extends\s+([^{}]+))?\s*([={])/g)) {
+    for (const m of text.matchAll(/\b(interface|type|const)\s+(\w+)(?:<[^;{}]*?>)?\s*(?:extends\s+([^{}]+))?\s*([={:])/g)) {
       let body;
-      if (m[4] === '{') {
+      if (m[1] === 'const') {
+        body = splitTop(text.slice(m.index + m[0].length))[0];
+      } else if (m[4] === '{') {
         const start = m.index + m[0].length - 1, end = braceEnd(text, start);
         body = text.slice(start, end + 1);
         if (m[3]) body += ` & ${m[3]}`;
@@ -66,6 +72,19 @@ export function members(body) {
 function variants(type, db, seen = new Set()) {
   if (!type || seen.has(type)) return [];
   seen = new Set([...seen, type]);
+  const staticValue = type.match(/^Static<\s*typeof\s+(\w+)\s*>$/);
+  if (staticValue) return variants(staticValue[1], db, seen);
+  const wrapper = type.match(/^Type\.(TObject|TOptional|TReadonlyOptional|TArray|TUnion|TIntersect|TLiteral)<([\s\S]+)>$/);
+  if (wrapper) {
+    const [, name, inner] = wrapper;
+    if (name === 'TArray') return ['array'];
+    if (name === 'TUnion' || name === 'TIntersect') {
+      if (!inner.trim().startsWith('[')) return variants(inner, db, seen);
+      return splitTop(inner.trim().slice(1, -1), ',').flatMap(t => variants(t, db, seen));
+    }
+    if (name === 'TLiteral') return [inner];
+    return variants(inner, db, seen);
+  }
   const union = splitTop(type, '|');
   if (union.length > 1) return union.flatMap(t => variants(t, db, seen));
   const intersection = splitTop(type, '&');
@@ -108,10 +127,35 @@ function fieldTypes(shapes, path, db) {
 function scalarTypes(t, db, seen = new Set()) {
   if (seen.has(t)) return [t];
   seen.add(t);
+  const bare = {
+    'Type.TString': 'string',
+    'Type.TNumber': 'number',
+    'Type.TInteger': 'number',
+    'Type.TBoolean': 'boolean',
+    'Type.TNull': 'null',
+  }[t];
+  if (bare) return [bare];
+  const staticValue = t.match(/^Static<\s*typeof\s+(\w+)\s*>$/);
+  if (staticValue) return scalarTypes(staticValue[1], db, seen);
+  const wrapper = t.match(/^Type\.(TObject|TOptional|TReadonlyOptional|TArray|TUnion|TIntersect|TLiteral|TString|TNumber|TInteger|TBoolean|TNull|TRecord|TEnum)<([\s\S]+)>$/);
+  if (wrapper) {
+    const [, name, inner] = wrapper;
+    const primitive = {
+      TString: 'string', TNumber: 'number', TInteger: 'number',
+      TBoolean: 'boolean', TNull: 'null', TArray: 'array', TObject: 'object',
+    }[name];
+    if (primitive) return [primitive];
+    if (name === 'TLiteral') return [inner];
+    if (name === 'TUnion' || name === 'TIntersect') {
+      if (!inner.trim().startsWith('[')) return scalarTypes(inner, db, seen);
+      return splitTop(inner.trim().slice(1, -1), ',').flatMap(x => scalarTypes(x, db, seen));
+    }
+    return scalarTypes(inner, db, seen);
+  }
   if (db.has(t)) return splitTop(db.get(t).body, '|').flatMap(x => scalarTypes(x, db, seen));
   return splitTop(t, '|');
 }
-const kind = t => /^(?:true|false)$/.test(t) ? 'boolean' : /\[\]$|^(?:Readonly)?Array</.test(t) ? 'array'
+const kind = t => /^(?:true|false)$/.test(t) ? 'boolean' : /\[\]$|^(?:Readonly)?Array</.test(t) || t === 'array' ? 'array'
   : /^(?:string|number|boolean)\b/.exec(t)?.[0] ?? (/^["']/.test(t) ? 'string' : t.startsWith('{') ? 'object' : 'unknown');
 
 export function locatePackage(command, visited = new Set()) {
@@ -141,7 +185,13 @@ function walk(dir) {
 }
 export function inspectPackage(packageDir, help) {
   const files = {};
-  const primary = ['dist/modes/rpc/rpc-types.d.ts', 'dist/core/agent-session.d.ts', 'dist/core/extensions/types.d.ts', 'dist/core/settings-manager.d.ts'];
+  const primary = [
+    'dist/modes/rpc/rpc-types.d.ts',
+    'dist/core/agent-session.d.ts',
+    'dist/core/extensions/types.d.ts',
+    'dist/core/settings-manager.d.ts',
+    'dist/core/settings-schema.d.ts',
+  ];
   const candidates = [...primary.map(p => join(packageDir, p)),
     ...['pi-agent-core', 'pi-ai', 'pi-mcp'].flatMap(p => walk(join(installedDependency(packageDir, p), 'dist'))), ...walk(join(packageDir, 'dist'))];
   for (const file of candidates.filter(p => p.endsWith('.d.ts'))) if (existsSync(file)) files[relative(packageDir, file)] = read(file);
@@ -163,7 +213,7 @@ export function inspectPackage(packageDir, help) {
   const cli = [...help.matchAll(/^[ \t]{2}(--[\w-]+)(?:,\s*(-[\w-]+))?/gm)].flatMap(m => [m[1], ...(m[2] ? [m[2]] : [])]);
   const inventory = { commands: Object.keys(rpc), events: Object.keys(events), cli, extensionApi: extensionMethods, settings, uiMethods: Object.keys(ui) };
   const evidence = { commands: 'dist/modes/rpc/rpc-types.d.ts#RpcCommand', events: 'dist/core/agent-session.d.ts#AgentSessionEvent + pi-agent-core#AgentEvent',
-    cli: 'pi --help#Options', extensionApi: 'dist/core/extensions/types.d.ts#ExtensionAPI', settings: 'dist/core/settings-manager.d.ts#Settings', uiMethods: 'dist/modes/rpc/rpc-types.d.ts#RpcExtensionUIRequest' };
+    cli: 'pi --help#Options', extensionApi: 'dist/core/extensions/types.d.ts#ExtensionAPI', settings: 'dist/core/settings-schema.d.ts#Settings', uiMethods: 'dist/modes/rpc/rpc-types.d.ts#RpcExtensionUIRequest' };
   const unknown = [];
   for (const category of Object.keys(inventory)) {
     inventory[category] = [...new Set(inventory[category])].sort();
@@ -254,11 +304,17 @@ export function compare(surface, current, baseline) {
 }
 
 // Only a fixed allowlist of getters is sent. No prompt, auth, extensions or model calls.
-export async function probe(command, directory, { spawnFn = spawn, timeout = 10000, env = process.env, scope = new ProcessScope() } = {}) {
+export async function probe(command, directory, {
+  spawnFn = spawn,
+  timeout = 10000,
+  env = process.env,
+  scope = new ProcessScope(),
+  prefixArgs = [],
+} = {}) {
   mkdirSync(directory, { recursive: true });
   const safeEnv = { PATH: `${dirname(process.execPath)}:${env.PATH ?? ''}`, HOME: directory, TMPDIR: directory,
     PI_CODING_AGENT_DIR: directory, PI_CODING_AGENT_SESSION_DIR: join(directory, 'sessions'), PI_OFFLINE: '1', PI_TELEMETRY: '0' };
-  const child = spawnFn(command, ['--mode', 'rpc', '--no-session', '--no-extensions', '--no-mcp', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files', '--no-tools'],
+  const child = spawnFn(command, [...prefixArgs, '--mode', 'rpc', '--no-session', '--no-extensions', '--no-mcp', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files', '--no-tools'],
     { cwd: directory, env: safeEnv, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
   const tracked = scope.track(child);
   let closed = false, failure, stderr = ''; const pending = new Map();
@@ -351,31 +407,29 @@ export async function main(args = process.argv.slice(2), { run, remove = rmSync,
     baselineState = { present: !!baseline, reviewed: baseline?.reviewed === true, schemaVersion: baseline?.schemaVersion ?? null, version: baseline?.version ?? null };
     temp = mkdtempSync(join(tmpdir(), 'coda-pi-compat-'));
     const env = minimalEnv(temp);
-    let command = options.pi ? resolve(options.pi) : findPi(JSON.parse(process.env.CODA_PLUGIN_SETTINGS || '{}'));
+    const node = process.env.CODA_NODE || process.execPath;
+    let launch = options.pi
+      ? { command: resolve(options.pi), prefixArgs: [], kind: 'external' }
+      : resolvePiLaunch(JSON.parse(process.env.CODA_PLUGIN_SETTINGS || '{}'), { pluginPath: root, node });
     if (options.install) {
-      const node = process.env.CODA_NODE || process.execPath;
       const npm = join(dirname(node), '../lib/node_modules/npm/bin/npm-cli.js');
       if (!existsSync(npm)) throw new Error(`当前 Node 没带 npm：${npm}`);
       const prefix = join(temp, 'prefix');
-      if (options.install === VERIFIED_PI_VERSION) {
-        prepareRuntime(prefix);
-        await run(node, [npm, 'ci', '--cache', join(temp, 'npm-cache'), '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier'], { cwd: prefix, env, timeout: 540000 });
-        command = join(prefix, 'node_modules/.bin/pi');
-      } else {
-        await run(node, [npm, 'install', '--global', '--prefix', prefix, '--cache', join(temp, 'npm-cache'), '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', `${PACKAGE}@${options.install}`], { cwd: temp, env, timeout: 540000 });
-        command = join(prefix, 'bin/pi');
-      }
+      await run(node, [npm, 'install', '--global', '--prefix', prefix, '--cache', join(temp, 'npm-cache'), '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', `${PACKAGE}@${options.install}`], { cwd: temp, env, timeout: 540000 });
+      launch = { command: join(prefix, 'bin/pi'), prefixArgs: [], kind: 'external' };
     }
-    const { stdout: versionText } = await run(command, ['--version'], { cwd: temp, env, timeout: 15000 });
+    const command = launch.command;
+    const { stdout: versionText } = await run(command, launchArgs(launch, ['--version']), { cwd: temp, env, timeout: 15000 });
     const version = parsePiVersion(versionText);
-    if (!version) throw new Error(`Pi 版本无法解析：${command}`);
-    const packageDir = locatePackage(command);
+    const commandPath = launch.cliPath ?? command;
+    if (!version) throw new Error(`Pi 版本无法解析：${commandPath}`);
+    const packageDir = locatePackage(commandPath);
     if (json(join(packageDir, 'package.json')).version !== version) throw new Error('可执行文件版本与定位到的 npm 包版本不一致');
-    const { stdout: help } = await run(command, ['--help'], { cwd: temp, env, timeout: 15000, maxBuffer: 4 * 1024 * 1024 });
+    const { stdout: help } = await run(command, launchArgs(launch, ['--help']), { cwd: temp, env, timeout: 15000, maxBuffer: 4 * 1024 * 1024 });
     const current = { ...inspectPackage(packageDir, help), version };
     const surface = json(surfacePath);
-    const report = { baseline: baselineState, version, command, packageDir, confidence: current.unknown.length ? '低（部分文档回退）' : '高（发布的声明和 CLI 帮助）；复杂类型无法证明时转人工评估', ...compare(surface, current, baseline) };
-    const probeResults = await probeFn(command, join(temp, 'probe'), { env, scope });
+    const report = { baseline: baselineState, version, command: commandPath, packageDir, confidence: current.unknown.length ? '低（部分文档回退）' : '高（发布的声明和 CLI 帮助）；复杂类型无法证明时转人工评估', ...compare(surface, current, baseline) };
+    const probeResults = await probeFn(command, join(temp, 'probe'), { env, scope, prefixArgs: launch.prefixArgs });
     for (const name of PROBE_COMMANDS) if (!probeResults?.[name]) throw new Error(`缺少只读探测响应 ${name}`);
     const probed = checkProbe(probeResults, surface);
     report.incompatible.push(...probed.failures); report.passed.push(...probed.passed);
