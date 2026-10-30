@@ -84,6 +84,31 @@ test('declaration parser handles comments, nested objects, unions, generics, ali
   assert.ok(c.inventory.cli.includes('-e'));
 });
 
+test('settings scanner expands TypeBox aliases and Omit intersections', t => {
+  const dir = temporary(t);
+  write(dir, 'package.json', JSON.stringify({ name: '@earendil-works/pi-coding-agent', version: '1.4.0' }));
+  write(dir, 'dist/modes/rpc/rpc-types.d.ts', types);
+  write(dir, 'dist/core/agent-session.d.ts', 'export type AgentSessionEvent = {type: "agent_settled"; aborted: boolean;};');
+  write(dir, 'dist/core/extensions/types.d.ts', 'export interface ExtensionAPI {registerProvider(name: string, config: ProviderConfig): void;}');
+  write(dir, 'dist/core/settings-schema.d.ts', `
+declare const SettingsSchema: Type.TObject<{
+  defaultModel: Type.TOptional<Type.TString>;
+  queueMode: Type.TOptional<Type.TLiteral<"all">>;
+  retry: Type.TOptional<Type.TObject<{enabled: Type.TOptional<Type.TBoolean>;}>>;
+  skills: Type.TOptional<Type.TArray<Type.TString>>;
+}>;
+type SettingsInput = Static<typeof SettingsSchema>;
+export interface Settings extends Omit<SettingsInput, "queueMode" | "retry" | "skills"> {
+  retry?: {enabled?: boolean;};
+  skills?: string[];
+}
+`);
+  const c = inspectPackage(dir, help);
+  assert.deepEqual(c.inventory.settings, ['defaultModel', 'retry', 'retry.enabled', 'skills']);
+  assert.ok(!c.inventory.settings.includes('queueMode'));
+  assert.deepEqual(c.unknown, []);
+});
+
 test('removed command, renamed nested field, changed scalar and new required input are incompatible', t => {
   const c = current(t), b = baseline(c);
   c.inventory.commands = []; assert.ok(compare(minimal,c,b).incompatible.some(r => r.message.includes('get_state')));

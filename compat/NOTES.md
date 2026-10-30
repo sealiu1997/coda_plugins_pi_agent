@@ -30,7 +30,7 @@ node scripts/check-pi-compat.mjs --accept
 | CLI 参数 | 隔离运行的 `pi --help` 选项行 | 中高；帮助文本可能不完整 |
 | 文档回退 | 包内 docs/rpc*.md、extensions.md、settings.md、cli.md | 低；只提示人工评估 |
 
-内置声明读取器识别对象、联合、继承、泛型引用、`TypeBox` 的 `Static<typeof ...>` wrapper 和常见索引访问，不等价于 TypeScript 编译器。字段核对使用 JSON 粗类型；无法解析的结构会提示人工评估。基线签名变化也会报告，以覆盖参数、可选性和枚举等进一步变化。工具结果 `partialResult`/`result` 明确声明为 `any`；插件仅依赖父字段存在，`mapToolResultContent` 对 content 用 `Array.isArray` 保护，fake live 覆盖 null、数字、对象与非数组 content；不伪称静态证明嵌套结构。用户额外参数、用户扩展、任意 provider 的错误文字、MCP 配置值展开语义，以及需要真实模型回合才能观察的行为仍需人工验证。不会为了证明这些行为发送 prompt 或调用模型。
+内置声明读取器识别对象、联合、继承、泛型引用、`Omit`/`Pick`、`TypeBox` 的 `Static<typeof ...>` wrapper 和常见索引访问，不等价于 TypeScript 编译器。字段核对使用 JSON 粗类型；无法解析的结构会提示人工评估。基线签名变化也会报告，以覆盖参数、可选性和枚举等进一步变化。工具结果 `partialResult`/`result` 明确声明为 `any`；插件仅依赖父字段存在，`mapToolResultContent` 对 content 用 `Array.isArray` 保护，fake live 覆盖 null、数字、对象与非数组 content；不伪称静态证明嵌套结构。用户额外参数、用户扩展、任意 provider 的错误文字、MCP 配置值展开语义，以及需要真实模型回合才能观察的行为仍需人工验证。不会为了证明这些行为发送 prompt 或调用模型。
 
 实测仅运行固定的五个 getter，使用临时 cwd、HOME、PI_CODING_AGENT_DIR 和 session 目录；不继承 API Key，关闭扩展、MCP、资源发现、遥测与启动网络。空模型列表、未命名会话和空上下文合法，探测不会据此判断登录失败。未出现的可选字段依靠声明检查；报告中的“只读探测通过”不代表实际观察到全部可选字段。所有扫描器子进程各自拥有进程组，结束先 TERM，最多等待 500ms 后 KILL，并在有限时间内等待关闭。顶层 SIGINT/SIGTERM 会清理当前 git/npm/pi 进程组和临时目录；清理失败返回 3（无法检查），不会误报为不兼容。
 

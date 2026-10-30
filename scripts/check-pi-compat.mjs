@@ -72,6 +72,15 @@ export function members(body) {
 function variants(type, db, seen = new Set()) {
   if (!type || seen.has(type)) return [];
   seen = new Set([...seen, type]);
+  const utility = type.match(/^(Omit|Pick)<([\s\S]+)>$/);
+  if (utility) {
+    const [base, keysType] = splitTop(utility[2], ',');
+    if (!base || !keysType) return [];
+    const keys = new Set([...keysType.matchAll(/["']([^"']+)["']/g)].map(m => m[1]));
+    return variants(base, db, seen).map(shape => Object.fromEntries(
+      Object.entries(shape).filter(([key]) => utility[1] === 'Omit' ? !keys.has(key) : keys.has(key)),
+    ));
+  }
   const staticValue = type.match(/^Static<\s*typeof\s+(\w+)\s*>$/);
   if (staticValue) return variants(staticValue[1], db, seen);
   const wrapper = type.match(/^Type\.(TObject|TOptional|TReadonlyOptional|TArray|TUnion|TIntersect|TLiteral)<([\s\S]+)>$/);
@@ -205,10 +214,13 @@ export function inspectPackage(packageDir, help) {
   const extension = db.get('ExtensionAPI');
   const extensionMembers = extension ? splitTop(extension.body.slice(1, braceEnd(extension.body, 0))) : [];
   const extensionMethods = extensionMembers.map(p => p.match(/^(\w+)\??(?:<[^\n]*?>)?\s*\(/)?.[1]).filter(Boolean);
-  const settingKeys = (type, prefix = '', depth = 0) => depth > 6 ? [] : variants(type, db).flatMap(shape => Object.entries(shape).flatMap(([key, field]) => {
+  const settingKeys = (type, prefix = '', depth = 0) => depth > 6 ? [] : variants(type, db).flatMap(shape => {
+    if (!shape || typeof shape !== 'object' || Array.isArray(shape)) return [];
+    return Object.entries(shape).flatMap(([key, field]) => {
     const name = prefix + key;
     return [name, ...settingKeys(field.type, name + '.', depth + 1)];
-  }));
+    });
+  });
   const settings = settingKeys('Settings');
   const cli = [...help.matchAll(/^[ \t]{2}(--[\w-]+)(?:,\s*(-[\w-]+))?/gm)].flatMap(m => [m[1], ...(m[2] ? [m[2]] : [])]);
   const inventory = { commands: Object.keys(rpc), events: Object.keys(events), cli, extensionApi: extensionMethods, settings, uiMethods: Object.keys(ui) };
