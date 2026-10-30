@@ -10,7 +10,10 @@ import { delimiter, join } from 'node:path';
 export const MIN_PI_VERSION = '1.1.0';
 export const VERIFIED_PI_VERSION = MIN_PI_VERSION;
 
-export const parsePiVersion = output => String(output ?? '').match(/\b\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?\b/)?.[0] ?? null;
+export const parsePiVersion = output => {
+  const match = String(output ?? '').match(/\bv?(\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?)\b/);
+  return match?.[1] ?? null;
+};
 
 export function supportedVersion(version) {
   const parts = /^(\d+)\.(\d+)\.(\d+)(?:\+[^ ]+)?$/.exec(version ?? '');
@@ -23,22 +26,20 @@ export function supportedVersion(version) {
   return true;
 }
 export function assertPiVersion(version, command) {
-  if (!supportedVersion(version)) throw new Error(`Pi ${version ?? '版本未知'}（${command}）不满足最低版本 ${MIN_PI_VERSION}。请自行升级该 Pi：npm i -g ${PACKAGE}@${VERIFIED_PI_VERSION}，或将 pi.commandPath 改回 pi 后重新准备运行环境。`);
+  if (!supportedVersion(version)) throw new Error(`Pi ${version ?? '版本未知'}（${command}）不满足最低版本 ${MIN_PI_VERSION}。请在 Pi 运行时的“更新到最新版”里升级，或执行 npm i -g ${PACKAGE}@latest；也可以将 pi.commandPath 改回 pi 后重新准备运行环境。`);
   return version;
 }
 
 export const PACKAGE = '@earendil-works/pi-coding-agent';
 
-// The npm prefix setup installs Pi into: the plugin's state, none for a backend without one.
-export const managedPrefix = (env = process.env) => env.CODA_PLUGIN_STATE ? join(env.CODA_PLUGIN_STATE, 'pi') : null;
+// The npm prefix setup owns: the user's expected ~/.local/bin, overridable for tests and managed hosts.
+export const managedPrefix = (env = process.env, home = homedir()) => env.CODA_PI_PREFIX || join(home, '.local');
 
 // The Pi this plugin installed itself: where the agent looks for it here and where setup installs and repairs it.
-export const managedPi = (env = process.env) => {
-  const prefix = managedPrefix(env);
-  return prefix ? join(prefix, 'node_modules', '.bin', 'pi') : null;
-};
+export const managedPi = (env = process.env, home = homedir()) => join(managedPrefix(env, home), 'bin', 'pi');
 
-export const legacyManagedPi = (env = process.env) => managedPrefix(env) ? join(managedPrefix(env), 'bin', 'pi') : null;
+// Versions before 0.4 installed under the plugin state; keep finding them during migration.
+export const legacyManagedPi = (env = process.env) => env.CODA_PLUGIN_STATE ? join(env.CODA_PLUGIN_STATE, 'pi', 'node_modules', '.bin', 'pi') : null;
 
 const isExecutableFile = path => {
   try {
@@ -55,7 +56,7 @@ export function findPi(settings, { env = process.env, home = homedir(), usable =
   if (configured && configured !== 'pi') return configured;
   const onPath = (env.PATH ?? '').split(delimiter).filter(Boolean).map(dir => join(dir, 'pi')).find(usable);
   if (onPath) return onPath;
-  const own = managedPi(env);
+  const own = managedPi(env, home);
   return [join(home, '.npm-global/bin/pi'), '/opt/homebrew/bin/pi', '/usr/local/bin/pi', join(home, '.local/bin/pi'), join(home, '.bun/bin/pi'),
     ...(own ? [own, legacyManagedPi(env)] : [])].find(usable) ?? 'pi';
 }

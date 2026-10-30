@@ -4,9 +4,9 @@
 
 ## 要求
 
-- Pi 由插件自动准备：安装或更新插件后，Coda 运行插件的「准备运行环境」（`agent/setup.mjs`）。最低支持且已验证的 Pi 为 **1.1.0**。这台机器已有不低于最低版本的 `pi`（设置里的路径、PATH 或下面的常见目录）就直接用并保留原版本；
-  没有可用的外部 Pi，或插件管理的 Pi 缺失、损坏、过旧时，用 Coda 自带的 Node 和 npm 把固定的 `@earendil-works/pi-coding-agent@1.1.0` 装进插件自己的状态目录（`$CODA_PLUGIN_STATE/pi`），不动全局。
-  装不上时插件页会写原因并给「重试」；也可以自己 `npm i -g @earendil-works/pi-coding-agent`。
+- Pi 由插件自动准备：安装或更新插件后，Coda 运行插件的「准备运行环境」（`agent/setup.mjs`）。最低支持的 Pi 为 **1.1.0**；这台机器已有能运行且不低于最低版本的 `pi`（设置里的路径、PATH 或常见目录）就直接用。
+  没有可用的外部 Pi 时，用 Coda 自带的 Node 和 npm 把 `@earendil-works/pi-coding-agent@latest` 装到用户预期的 `~/.local` npm prefix，入口是 `~/.local/bin/pi`。
+  装不上时插件页会写原因并给「重试」；安装后可打开资源页的「Pi 运行时」查看当前版本、npm 最新版，并执行更新。
 - 还要在 Coda 里添加 provider（见下），或在 pi 里完成登录。
 - Node 由 Coda 提供（`$CODA_NODE`），插件运行时没有 npm 依赖；开发检查器是锁定版本的 devDependency。
 - 直接使用本机 Pi 的配置、登录、扩展与会话目录（`$PI_CODING_AGENT_DIR`，默认 `~/.pi/agent`），插件不复制也不改写它们；Coda 里开的会话也能在 `pi --resume` 里看到。
@@ -23,7 +23,7 @@
 
 | 设置 | 默认值 | 说明 |
 | --- | --- | --- |
-| `pi.commandPath` | `pi` | `pi` 可执行文件路径；留为 `pi` 时依次检查 PATH、`~/.npm-global/bin`、`/opt/homebrew/bin`、`/usr/local/bin`、`~/.local/bin`、`~/.bun/bin`，最后是插件自己装的那份。填了路径却运行不了，或机器上找到的 `pi` 运行不了时，准备运行环境会报错并指出路径，不另装一份；外部 Pi 低于最低版本或版本未知时明确报错并给出升级指引；显式设置的路径始终不被覆盖，即使指向插件状态目录。默认发现的插件自管副本损坏或过旧时安装固定已验证版本。 |
+| `pi.commandPath` | `pi` | `pi` 可执行文件路径；留为 `pi` 时依次检查 PATH、`~/.npm-global/bin`、`/opt/homebrew/bin`、`/usr/local/bin`、`~/.local/bin`、`~/.bun/bin`，最后兼容旧版插件留下的自管副本。显式填写的路径始终优先；准备运行环境不会覆盖它，可在资源页的「Pi 运行时」检查并更新可识别的 npm 安装。 |
 | `pi.extraArgs` | 空 | 追加到 `pi --mode rpc` 的额外 CLI 参数。 |
 | `pi.providers` | 无 | 一行一个 provider：地址、Key（密文）、协议、推理、上下文长度、最大输出。行名就是 Pi 里的 provider 名（不能带 `/`）。 |
 
@@ -95,16 +95,22 @@ node scripts/check-pi-compat.mjs --pi /absolute/path/to/pi --json
 node scripts/check-pi-compat.mjs --accept
 ```
 
-## Pi 升级策略
+## Pi 运行时管理
 
-普通 setup 不追 latest。固定版本的完整 npm 依赖图随 `agent/pi-install/package-lock.json` 打包，以 `npm ci --ignore-scripts` 安装到插件状态目录；内部 Pi 包也锁在 1.1.0，避免其 `^1.1.0` 范围拉入未经评估的新依赖。运行时最低版本、setup 固定安装版本、已确认快照和 CI 命令由一致性测试约束。
-PATH、常见目录或 `pi.commandPath` 指定的外部 Pi 达标就沿用；过旧时由用户自行升级，例如 `npm i -g @earendil-works/pi-coding-agent@1.1.0`。插件不替用户改全局安装。
+插件安装时默认把 Pi latest 安装到 `~/.local/bin/pi`。已有可用 Pi 时沿用当前安装，不会因为安装或更新插件而擅自改变用户已有的版本。
 
-如果明确希望把**插件自己管理的副本**升级到 latest，可在后端设置好插件状态目录后运行（不会覆盖显式设置的路径，也不会升级外部 Pi）：
+资源页的「Pi 运行时」面板显示当前路径、当前版本和 npm latest，并提供「安装最新版」或「更新到最新版」按钮：
+
+- 插件自己安装的 `~/.local` 副本，直接更新该 prefix。
+- `/opt/homebrew/lib/node_modules`、nvm 或其他标准 npm global 布局中的 Pi，用对应 prefix 更新。
+- 项目本地、Bun、独立下载或无法识别安装来源的 Pi 不会被覆盖；面板会提示改用原安装工具，或在 `pi.commandPath` 中改指 npm 安装的 Pi。
+- 更新不会主动结束正在运行的 Coda 会话；新版本从之后启动的 Pi 进程生效。
+
+命令行检查和更新使用同一套逻辑：
 
 ```sh
-CODA_PLUGIN_STATE=/absolute/path/to/plugin-state \
-  node agent/setup.mjs --upgrade-latest
+npm run pi:status
+npm run pi:update
 ```
 
-这会安装尚未经本仓库固定验证的候选；可先用 `node scripts/check-pi-compat.mjs --install latest --json` 评估。已达标的自管副本在普通 setup 中保留现有版本。
+`agent/pi-install/` 中固定的 1.1.0 依赖图继续供兼容扫描器构造可重复的基线安装；生产 setup 默认安装 latest，Coda 插件自身版本仍由插件商店的检查更新机制管理。每日 upstream advisory 会检查 Pi latest 的接口变化，普通稳定 CI 不会因为上游半夜发版而突然失败。

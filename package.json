@@ -2,8 +2,8 @@
   "name": "@coda-console/pi",
   "id": "pi",
   "displayName": "Pi",
-  "description": "Pi Agent 插件：把本机安装的 Pi coding agent 以 RPC 模式接入 Coda，支持会话指令、模型与推理强度选择、插话和会话恢复。",
-  "version": "0.3.1",
+  "description": "Pi Agent 插件：安装并管理本机的 Pi coding agent，以 RPC 模式接入 Coda，支持会话指令、模型与推理强度选择、插话和会话恢复。",
+  "version": "0.4.0",
   "categories": [
     "Agent"
   ],
@@ -25,7 +25,7 @@
           "${PI_CODING_AGENT_DIR:-~/.pi/agent}/settings.json",
           "${PI_CODING_AGENT_DIR:-~/.pi/agent}/models.json"
         ],
-        "setupHint": "插件会自动安装 Pi；装不上时在插件页重试准备运行环境，或自己安装 `npm i -g @earendil-works/pi-coding-agent`。再在 Coda 里添加 provider，或在 pi 里登录"
+        "setupHint": "插件会自动安装最新版 Pi 到 ~/.local/bin；装不上时在插件页重试准备运行环境。之后可在资源页的「Pi 运行时」检查或更新版本。再在 Coda 里添加 provider，或在 pi 里登录"
       }
     ],
     "configuration": {
@@ -33,7 +33,7 @@
         "pi.commandPath": {
           "type": "string",
           "default": "pi",
-          "description": "pi 可执行文件的路径；留为 pi 时使用 PATH 和常见安装目录。",
+          "description": "pi 可执行文件的路径；留为 pi 时依次使用 PATH 和常见安装目录。资源页的「Pi 运行时」可检查版本并更新插件管理的或 npm 全局安装的 Pi。",
           "order": 1
         },
         "pi.extraArgs": {
@@ -108,6 +108,20 @@
         }
       }
     },
+    "panels": [
+      {
+        "id": "runtime",
+        "title": "Pi 运行时",
+        "command": "node \"$CODA_PLUGIN_PATH/agent/pi-runtime-panel.mjs\"",
+        "maxAge": "PT10M",
+        "actions": {
+          "update-latest": {
+            "command": "node \"$CODA_PLUGIN_PATH/agent/pi-runtime-action.mjs\"",
+            "confirm": "把当前 Pi 更新到 npm latest？\n这只会更新插件管理的副本或可识别的 npm 全局安装，不会主动结束正在运行的会话；新版本从之后启动的会话生效。"
+          }
+        }
+      }
+    ],
     "setup": {
       "command": "exec \"$CODA_NODE\" \"$CODA_PLUGIN_PATH/agent/setup.mjs\""
     }
@@ -132,6 +146,8 @@
     "check:coda": "coda-plugin-check . --manifest && node scripts/check-fake-live.mjs --handshake",
     "check:pi": "node scripts/check-pi-compat.mjs",
     "check:pi:verified": "node scripts/check-pi-compat.mjs --install 1.1.0",
+    "pi:status": "node agent/pi-runtime-panel.mjs",
+    "pi:update": "node agent/pi-runtime-action.mjs",
     "check:fake-live": "node scripts/check-fake-live.mjs",
     "check:real-live": "coda-plugin-check . --live",
     "probe:upstream": "node scripts/probe-upstream.mjs"

@@ -23,7 +23,10 @@ test('surface entries have real source evidence; every literal RPC send and CLI 
   for (const [file, text] of Object.entries(source)) {
     const code = uncomment(file === 'agent/setup.mjs' ? text.slice(0,text.indexOf('  const npm =')) : text);
     for (const m of code.matchAll(/\.send\(['"]([^'"]+)['"]/g)) assert.ok(surface.dependencies.commands.some(d => d.name === m[1] && d.sources.includes(file)), `${file}: ${m[1]}`);
-    for (const m of code.matchAll(/['"](--[\w-]+=?|-e=?)['"]/g)) assert.ok(surface.dependencies.cli.some(d => d.name === m[1] && d.sources.includes(file)), `${file}: ${m[1]}`);
+    // These lifecycle scripts have their own flags; only pi-runtime's --version call reaches Pi.
+    if (file === 'agent/pi-runtime.mjs') assert.match(code, /run\(command, \['--version'\]/);
+    else if (file === 'agent/setup.mjs') assert.match(code, /versionOf\(found/);
+    else for (const m of code.matchAll(/['"](--[\w-]+=?|-e=?)['"]/g)) assert.ok(surface.dependencies.cli.some(d => d.name === m[1] && d.sources.includes(file)), `${file}: ${m[1]}`);
     for (const m of code.matchAll(/pi\.(register\w+)\(/g)) assert.ok(surface.dependencies.extensionApi.some(d => d.name === m[1] && d.sources.includes(file)));
   }
 });
