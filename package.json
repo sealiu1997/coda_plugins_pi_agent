@@ -115,8 +115,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/coda-console/coda-plugins.git",
-    "directory": "plugins/pi"
+    "url": "https://github.com/sealiu1997/coda_plugins_pi_agent.git"
   },
   "publishConfig": {
     "access": "public"
