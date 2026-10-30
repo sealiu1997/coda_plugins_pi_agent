@@ -73,14 +73,14 @@ Node ≥24。先 `npm ci --ignore-scripts`，再运行：
 | 命令 | 用途 |
 | --- | --- |
 | `npm test` | 单元测试与无需登录、无需真实模型的 fake Pi 端到端测试 |
-| `npm run check:coda` | 官方 checker 0.5.7 清单检查与 fake Pi 握手 |
+| `npm run check:coda` | 官方 checker 0.5.8 清单检查与 fake Pi 握手 |
 | `npm run check:fake-live` | 官方 `coda-plugin-check --live` 驱动真实插件入口，覆盖系统指令、回合、取消、插话、恢复与关闭 |
 | `npm run check:pi` | 扫描本机 Pi 安装包，核对 CLI/RPC/事件/扩展 API、能力新增与 changelog |
 | `npm run check:pi:verified` | 临时从 npm 安装固定 Pi 1.1.0 后扫描，不改全局安装 |
 | `npm run probe:upstream` | 手动运行独立的 latest 探测，报告写入 `compat-reports/` |
 | `npm run check:real-live` | **人工选择运行**：对本机真实 Pi 执行官方 live 检查，可能需要登录并消耗模型额度 |
 
-Coda 通用协议只复用官方 `@coda-console/plugin-check`，精确版本 **0.5.7** 与传递依赖写在 `package-lock.json`。不再维护另一套 Coda 协议扫描或协议基线。
+Coda 通用协议只复用官方 `@coda-console/plugin-check`，精确版本 **0.5.8** 与传递依赖写在 `package-lock.json`。不再维护另一套 Coda 协议扫描或协议基线。
 `check:coda` 的握手和 fake live 在临时插件副本中运行原始 `agent/` 文件，只把清单默认 `pi.commandPath` 指向 fake 可执行文件；不改你的设置或 Pi 配置。fake 也模拟 `--version`、`--help`、系统提示词文件与标题进程，且断言取消和轮中插话实际发生，跳过场景不能当作通过。
 
 普通 PR / main CI 只跑 lockfile 中的官方 checker 和已验证 Pi 固定候选。每日的 `Upstream compatibility advisory` workflow（也可手动发起）单独探测两个上游的 latest；上游变化或检查失败使这个独立任务告警，不进入普通 PR 的稳定检查。任务只给 `contents: read`，不使用 secrets，也不发布。

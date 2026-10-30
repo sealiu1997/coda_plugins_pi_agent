@@ -114,7 +114,7 @@ test('minimum, verified installer, snapshot and stable CI script agree', async (
   assert.equal(MIN_PI_VERSION,VERIFIED_PI_VERSION);
   assert.equal(baseline.version,MIN_PI_VERSION); assert.equal(baseline.reviewed,true);
   assert.equal(manifest.scripts['check:pi:verified'],`node scripts/check-pi-compat.mjs --install ${VERIFIED_PI_VERSION}`);
-  assert.equal(manifest.devDependencies['@coda-console/plugin-check'],'0.5.7');
+  assert.equal(manifest.devDependencies['@coda-console/plugin-check'],'0.5.8');
 });
 
 test('old and unknown external or explicitly configured Pi never trigger npm', () => {

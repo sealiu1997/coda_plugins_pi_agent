@@ -125,7 +125,7 @@
     "icons"
   ],
   "devDependencies": {
-    "@coda-console/plugin-check": "0.5.7"
+    "@coda-console/plugin-check": "0.5.8"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
