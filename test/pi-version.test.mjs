@@ -84,3 +84,11 @@ test("the plugin version fallback ends at 'unknown' when package.json cannot be 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('runtime version floor rejects old, unknown and prerelease versions with upgrade guidance', async () => {
+  const { supportedVersion, assertPiVersion } = await import('../agent/pi-command.mjs');
+  for (const value of [null,'?','1.0.99','1.1.0-beta.1','garbage']) {
+    assert.equal(supportedVersion(value),false); assert.throws(()=>assertPiVersion(value,'/external/pi'),/最低版本 1.1.0.*npm i -g/);
+  }
+  for (const value of ['1.1.0','1.1.1','1.10.0','2.0.0','1.1.0+build']) assert.equal(supportedVersion(value),true);
+});

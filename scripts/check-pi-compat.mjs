@@ -1,17 +1,18 @@
 // Inspect shipped declarations without importing Pi or running user extensions.
 import { readFileSync, writeFileSync, existsSync, readdirSync, realpathSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
-import { dirname, join, resolve, delimiter } from 'node:path';
+import { dirname, join, resolve, delimiter, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { spawn, execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { findPi, piVersion, PACKAGE } from '../agent/pi-command.mjs';
+import { findPi, PACKAGE, VERIFIED_PI_VERSION, parsePiVersion } from '../agent/pi-command.mjs';
+import { prepareRuntime } from '../agent/pi-install.mjs';
+import { ProcessScope, minimalEnv } from './process-scope.mjs';
 
+export const PROBE_COMMANDS = ['get_state', 'get_commands', 'get_available_models', 'get_available_thinking_levels', 'get_session_stats'];
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const read = path => readFileSync(path, 'utf8');
 const json = path => JSON.parse(read(path));
-const runFile = promisify(execFile);
 const clean = text => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
 // A deliberately small declaration reader. Unsupported syntax is reported as unknown.
@@ -127,6 +128,13 @@ export function locatePackage(command, visited = new Set()) {
   if (target) return locatePackage(target, visited);
   throw new Error(`无法从 ${command} 定位 ${PACKAGE}；可用 --pi 指向 npm 安装的实际入口`);
 }
+function installedDependency(packageDir, name) {
+  for (let dir = packageDir; dirname(dir) !== dir; dir = dirname(dir)) {
+    const candidate = join(dir, 'node_modules/@earendil-works', name);
+    if (existsSync(join(candidate, 'package.json'))) return candidate;
+  }
+  return join(packageDir, 'node_modules/@earendil-works', name);
+}
 function walk(dir) {
   if (!existsSync(dir)) return [];
   return readdirSync(dir, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]);
@@ -135,8 +143,8 @@ export function inspectPackage(packageDir, help) {
   const files = {};
   const primary = ['dist/modes/rpc/rpc-types.d.ts', 'dist/core/agent-session.d.ts', 'dist/core/extensions/types.d.ts', 'dist/core/settings-manager.d.ts'];
   const candidates = [...primary.map(p => join(packageDir, p)),
-    ...['pi-agent-core', 'pi-ai', 'pi-mcp'].flatMap(p => walk(join(packageDir, 'node_modules/@earendil-works', p, 'dist'))), ...walk(join(packageDir, 'dist'))];
-  for (const file of candidates.filter(p => p.endsWith('.d.ts'))) if (existsSync(file)) files[file.slice(packageDir.length + 1)] = read(file);
+    ...['pi-agent-core', 'pi-ai', 'pi-mcp'].flatMap(p => walk(join(installedDependency(packageDir, p), 'dist'))), ...walk(join(packageDir, 'dist'))];
+  for (const file of candidates.filter(p => p.endsWith('.d.ts'))) if (existsSync(file)) files[relative(packageDir, file)] = read(file);
   const db = declarations(files);
   const rpc = discriminants('RpcCommand', 'type', db), responses = discriminants('RpcResponse', 'command', db);
   // AgentSessionEvent wraps core events in Exclude/WithParentToolCallId; unwrap explicitly.
@@ -152,7 +160,7 @@ export function inspectPackage(packageDir, help) {
     return [name, ...settingKeys(field.type, name + '.', depth + 1)];
   }));
   const settings = settingKeys('Settings');
-  const cli = [...help.matchAll(/^\s{2}(--[\w-]+)(?:,\s*(-[\w-]+))?/gm)].flatMap(m => [m[1], ...(m[2] ? [m[2]] : [])]);
+  const cli = [...help.matchAll(/^[ \t]{2}(--[\w-]+)(?:,\s*(-[\w-]+))?/gm)].flatMap(m => [m[1], ...(m[2] ? [m[2]] : [])]);
   const inventory = { commands: Object.keys(rpc), events: Object.keys(events), cli, extensionApi: extensionMethods, settings, uiMethods: Object.keys(ui) };
   const evidence = { commands: 'dist/modes/rpc/rpc-types.d.ts#RpcCommand', events: 'dist/core/agent-session.d.ts#AgentSessionEvent + pi-agent-core#AgentEvent',
     cli: 'pi --help#Options', extensionApi: 'dist/core/extensions/types.d.ts#ExtensionAPI', settings: 'dist/core/settings-manager.d.ts#Settings', uiMethods: 'dist/modes/rpc/rpc-types.d.ts#RpcExtensionUIRequest' };
@@ -172,9 +180,12 @@ export function inspectPackage(packageDir, help) {
     responses: Object.fromEntries(Object.entries(responses).map(([k, v]) => [k, JSON.stringify(v)])),
     events: Object.fromEntries(Object.entries(events).map(([k, v]) => [k, JSON.stringify(v)])),
     extensionApi: Object.fromEntries(extensionMethods.map(name => [name, splitTop(extension.body.slice(1, braceEnd(extension.body, 0))).filter(p => new RegExp('^' + name + '[<(]').test(p)).map(p => p.replace(/\s+/g, ' ')).join('; ')])),
-    cli: Object.fromEntries([...help.matchAll(/^\s{2}(--[\w-]+)([^\n]*?)(?:\s{2,})([^\n]*)$/gm)].map(m => [m[1], m[2].trim()])),
+    cli: Object.fromEntries([...help.matchAll(/^[ \t]{2}(--[\w-]+)([^\n]*?)(?:[ \t]{2,})([^\n]*)$/gm)].map(m => [m[1], m[2].trim()])),
     types: Object.fromEntries([...db].filter(([name]) => /^(?:RpcSessionState|SessionStats|ContextUsage|Model|BaseModel|ModelCost.*|CompactionResult|Provider.*Config.*|Settings|ThinkingLevel|PromptDisposition|McpServerConfig|McpExposure)$/.test(name)).map(([name, d]) => [name, d.body.replace(/\s+/g, ' ')])),
   };
+  for (const match of help.matchAll(/^[ \t]{2}(--[\w-]+),\s*(-[\w-]+)([^\n]*?)(?:[ \t]{2,})/gm)) {
+    signatures.cli[match[2]] = match[3].trim();
+  }
   return { db, rpc, responses, events, ui, inventory, evidence, unknown, signatures };
 }
 
@@ -184,7 +195,7 @@ export function compare(surface, current, baseline) {
   for (const [category, deps] of Object.entries(surface.dependencies)) {
     for (const dep of deps) {
       const evidence = `${dep.sources.join(', ')} → ${current.evidence[category]}#${dep.name}`;
-      if (!current.inventory[category]?.includes(dep.name)) {
+      if (!current.inventory[category]?.includes(dep.normalizedTo ?? dep.name)) {
         (current.unknown.some(s => s.startsWith(category + ' ')) ? review : incompatible).push(item(`缺少 ${category} ${dep.name}`, evidence));
       } else passed.push(item(`${category} ${dep.name}`, evidence));
     }
@@ -193,8 +204,9 @@ export function compare(surface, current, baseline) {
     if (dep.signature && !current.signatures.extensionApi[dep.name]?.replace(/\s/g, '').includes(dep.signature.replace(/\s/g, ''))) incompatible.push(item(`扩展签名不兼容 ${dep.name}`, `${dep.sources.join(', ')} → ${current.evidence.extensionApi}#${dep.name}: ${current.signatures.extensionApi[dep.name]}`));
   }
   for (const dep of surface.dependencies.cli) {
-    const signature = current.signatures.cli[dep.name];
-    if (signature !== undefined && /[<[]/.test(signature) !== !!dep.takesValue) incompatible.push(item(`CLI 参数形状变化 ${dep.name}`, `pi --help: ${dep.name} ${signature}`));
+    const signature = current.signatures.cli[dep.normalizedTo ?? dep.name];
+    if (signature === undefined) review.push(item(`无法解析 CLI 签名 ${dep.name}`, `${dep.sources.join(', ')} → pi --help`));
+    else if (/[<[]/.test(signature) !== !!dep.takesValue) incompatible.push(item(`CLI 参数形状变化 ${dep.name}`, `pi --help: ${dep.name} ${signature}`));
   }
   for (const dep of surface.dependencies.commands) {
     const allowed = new Set(['id', 'type', ...surface.contracts.filter(c => c.scope === 'command' && c.symbol === dep.name).flatMap(c => Object.keys(c.fields))]);
@@ -224,38 +236,49 @@ export function compare(surface, current, baseline) {
     const values = scalarTypes(requirement.symbol, current.db).join(' ').match(/["']([^"']+)["']/g)?.map(s => s.slice(1, -1)) ?? [];
     for (const value of requirement.values) if (!values.includes(value)) (declaration ? incompatible : review).push(item(`枚举缺失 ${requirement.symbol}.${value}`, `${requirement.sources.join(', ')} → ${declaration?.file ?? '无法定位声明'}`));
   }
-  if (!baseline || !baseline.reviewed) review.push(item('尚无人确认基线；核对报告后运行 --accept', 'compat/pi-snapshot.json'));
+  if (!baseline || baseline.reviewed !== true) review.push(item('尚无人确认基线；核对报告后运行 --accept', 'compat/pi-snapshot.json'));
+  if (baseline && (baseline.schemaVersion !== 1 || Object.keys(current.inventory).some(key => !Array.isArray(baseline.inventory?.[key])) || Object.keys(current.signatures).some(key => !baseline.signatures?.[key] || typeof baseline.signatures[key] !== 'object' || Array.isArray(baseline.signatures[key])))) review.push(item('基线格式缺失或未知，需重新确认', 'compat/pi-snapshot.json'));
   if (baseline && baseline.version !== current.version) review.push(item(`Pi 版本漂移：${baseline.version} → ${current.version}`, 'pi --version / compat/pi-snapshot.json'));
   for (const [category, values] of Object.entries(current.inventory)) {
     if (!baseline) continue;
-    for (const value of values) if (!(baseline.inventory[category] ?? []).includes(value)) review.push(item(`新增 ${category} ${value}`, current.evidence[category]));
+    for (const value of values) if (!(baseline.inventory?.[category] ?? []).includes(value)) review.push(item(`新增 ${category} ${value}`, current.evidence[category]));
   }
   if (baseline?.signatures) for (const [category, values] of Object.entries(current.signatures)) {
     for (const [symbol, signature] of Object.entries(values)) if (baseline.signatures[category]?.[symbol] && baseline.signatures[category][symbol] !== signature) review.push(item(`声明变化 ${category}.${symbol}`, category === 'types' ? current.db.get(symbol)?.file : current.evidence[category] ?? 'dist/modes/rpc/rpc-types.d.ts#RpcResponse'));
+  }
+  if (baseline?.signatures) for (const [category, values] of Object.entries(baseline.signatures)) {
+    for (const symbol of Object.keys(values)) if (!(symbol in (current.signatures[category] ?? {}))) review.push(item(`声明消失或无法解析 ${category}.${symbol}`, '随包声明 / CLI 帮助'));
   }
   for (const message of current.unknown) review.push(item(message, '随包声明 / 文档'));
   return { incompatible, review, passed };
 }
 
 // Only a fixed allowlist of getters is sent. No prompt, auth, extensions or model calls.
-export async function probe(command, directory, { spawnFn = spawn, timeout = 10000, env = process.env } = {}) {
+export async function probe(command, directory, { spawnFn = spawn, timeout = 10000, env = process.env, scope = new ProcessScope() } = {}) {
   mkdirSync(directory, { recursive: true });
   const safeEnv = { PATH: `${dirname(process.execPath)}:${env.PATH ?? ''}`, HOME: directory, TMPDIR: directory,
     PI_CODING_AGENT_DIR: directory, PI_CODING_AGENT_SESSION_DIR: join(directory, 'sessions'), PI_OFFLINE: '1', PI_TELEMETRY: '0' };
   const child = spawnFn(command, ['--mode', 'rpc', '--no-session', '--no-extensions', '--no-mcp', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files', '--no-tools'],
-    { cwd: directory, env: safeEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+    { cwd: directory, env: safeEnv, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const tracked = scope.track(child);
   let closed = false, failure, stderr = ''; const pending = new Map();
-  const exit = new Promise(resolve => { child.once('close', () => { closed = true; resolve(); for (const p of pending.values()) p.reject(new Error(`Pi 提前退出：${stderr}`)); }); });
+  child.once('close', () => { closed = true; for (const p of pending.values()) p.reject(new Error(`Pi 提前退出：${stderr}`)); });
   child.on('error', error => { failure = error; for (const p of pending.values()) p.reject(error); });
   child.stdin.on('error', () => {});
   child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-2000); });
   const lines = createInterface({ input: child.stdout });
-  lines.on('line', line => { let r; try { r = JSON.parse(line); } catch { return; } if (r.type === 'response') pending.get(r.id)?.resolve(r); });
+  lines.on('line', line => {
+    let record;
+    try { record = JSON.parse(line); } catch { failure = new Error('Pi 输出不是 JSON'); }
+    if (!failure && (!record || typeof record !== 'object' || Array.isArray(record))) failure = new Error('Pi 输出不是 RPC 对象');
+    if (failure) { for (const p of pending.values()) p.reject(failure); return; }
+    if (record.type === 'response') pending.get(record.id)?.resolve(record);
+  });
   const onSignal = () => { failure = new Error('检查被信号中断'); for (const p of pending.values()) p.reject(failure); };
-  process.on('SIGTERM', onSignal); process.on('SIGINT', onSignal);
+  scope.controller.signal.addEventListener('abort', onSignal);
   const results = {};
   try {
-    for (const name of ['get_state', 'get_commands', 'get_available_models', 'get_available_thinking_levels', 'get_session_stats']) {
+    for (const name of PROBE_COMMANDS) {
       if (failure) throw failure;
       if (closed) throw new Error(`Pi 提前退出：${stderr}`);
       let timer;
@@ -270,11 +293,7 @@ export async function probe(command, directory, { spawnFn = spawn, timeout = 100
     return results;
   } finally {
     lines.close();
-    if (!closed) child.kill('SIGTERM');
-    let timer;
-    await Promise.race([exit, new Promise(resolve => { timer = setTimeout(resolve, 500); })]); clearTimeout(timer);
-    if (!closed) { child.kill('SIGKILL'); await exit; }
-    process.off('SIGTERM', onSignal); process.off('SIGINT', onSignal);
+    try { await scope.stop(tracked); } finally { scope.controller.signal.removeEventListener('abort', onSignal); }
   }
 }
 export function checkProbe(results, surface) {
@@ -320,39 +339,49 @@ export function parseArgs(args) {
   if (options.install && !/^(?:latest|\d+\.\d+\.\d+(?:-[\w.-]+)?)$/.test(options.install)) throw new Error('--install 只接受 latest 或精确 npm 版本');
   return options;
 }
-export async function main(args = process.argv.slice(2), { run = runFile, snapshotPath = join(root, 'compat/pi-snapshot.json'), surfacePath = join(root, 'compat/pi-surface.json'), probeFn = probe } = {}) {
+export async function main(args = process.argv.slice(2), { run, remove = rmSync, snapshotPath = join(root, 'compat/pi-snapshot.json'), surfacePath = join(root, 'compat/pi-surface.json'), probeFn = probe } = {}) {
   let options, temp;
+  const scope = new ProcessScope().listen();
+  run ??= scope.run.bind(scope);
+  let baselineState = { present: false, reviewed: false, schemaVersion: null, version: null };
   try {
     options = parseArgs(args);
     if (options.help) { console.log('用法：node scripts/check-pi-compat.mjs [--pi 路径 | --install 版本或latest] [--json] [--accept]\n--accept 表示你已人工确认当前 Pi，更新基线；其余运行不覆盖已有快照。'); return 0; }
+    const baseline = existsSync(snapshotPath) ? json(snapshotPath) : null;
+    baselineState = { present: !!baseline, reviewed: baseline?.reviewed === true, schemaVersion: baseline?.schemaVersion ?? null, version: baseline?.version ?? null };
     temp = mkdtempSync(join(tmpdir(), 'coda-pi-compat-'));
-    const env = { ...process.env, PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ''}`, PI_CODING_AGENT_DIR: temp, PI_OFFLINE: '1', PI_TELEMETRY: '0' };
+    const env = minimalEnv(temp);
     let command = options.pi ? resolve(options.pi) : findPi(JSON.parse(process.env.CODA_PLUGIN_SETTINGS || '{}'));
     if (options.install) {
       const node = process.env.CODA_NODE || process.execPath;
       const npm = join(dirname(node), '../lib/node_modules/npm/bin/npm-cli.js');
       if (!existsSync(npm)) throw new Error(`当前 Node 没带 npm：${npm}`);
       const prefix = join(temp, 'prefix');
-      await run(node, [npm, 'install', '--global', '--prefix', prefix, '--cache', join(temp, 'npm-cache'), '--no-audit', '--no-fund', '--no-update-notifier', `${PACKAGE}@${options.install}`], { cwd: temp, env, timeout: 540000, maxBuffer: 8 * 1024 * 1024 });
-      command = join(prefix, 'bin/pi');
+      if (options.install === VERIFIED_PI_VERSION) {
+        prepareRuntime(prefix);
+        await run(node, [npm, 'ci', '--cache', join(temp, 'npm-cache'), '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier'], { cwd: prefix, env, timeout: 540000 });
+        command = join(prefix, 'node_modules/.bin/pi');
+      } else {
+        await run(node, [npm, 'install', '--global', '--prefix', prefix, '--cache', join(temp, 'npm-cache'), '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', `${PACKAGE}@${options.install}`], { cwd: temp, env, timeout: 540000 });
+        command = join(prefix, 'bin/pi');
+      }
     }
-    // piVersion's shared implementation has no env argument; scope its environment override.
-    const previous = { ...process.env };
-    let version;
-    try { Object.assign(process.env, env); version = await piVersion(command); }
-    finally { for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key]; Object.assign(process.env, previous); }
-    if (!version) throw new Error(`Pi 无法运行：${command}`);
+    const { stdout: versionText } = await run(command, ['--version'], { cwd: temp, env, timeout: 15000 });
+    const version = parsePiVersion(versionText);
+    if (!version) throw new Error(`Pi 版本无法解析：${command}`);
     const packageDir = locatePackage(command);
     if (json(join(packageDir, 'package.json')).version !== version) throw new Error('可执行文件版本与定位到的 npm 包版本不一致');
     const { stdout: help } = await run(command, ['--help'], { cwd: temp, env, timeout: 15000, maxBuffer: 4 * 1024 * 1024 });
     const current = { ...inspectPackage(packageDir, help), version };
     const surface = json(surfacePath);
-    const baseline = existsSync(snapshotPath) ? json(snapshotPath) : null;
-    const report = { version, command, packageDir, confidence: current.unknown.length ? '低（部分文档回退）' : '高（发布的声明和 CLI 帮助）；复杂类型无法证明时转人工评估', ...compare(surface, current, baseline) };
-    const probed = checkProbe(await probeFn(command, join(temp, 'probe'), { env }), surface);
+    const report = { baseline: baselineState, version, command, packageDir, confidence: current.unknown.length ? '低（部分文档回退）' : '高（发布的声明和 CLI 帮助）；复杂类型无法证明时转人工评估', ...compare(surface, current, baseline) };
+    const probeResults = await probeFn(command, join(temp, 'probe'), { env, scope });
+    for (const name of PROBE_COMMANDS) if (!probeResults?.[name]) throw new Error(`缺少只读探测响应 ${name}`);
+    const probed = checkProbe(probeResults, surface);
     report.incompatible.push(...probed.failures); report.passed.push(...probed.passed);
     const changelog = join(packageDir, 'CHANGELOG.md');
     report.changelog = existsSync(changelog) ? changelogBetween(read(changelog), baseline?.version, version) : '';
+    if (!existsSync(changelog) && baseline?.version !== version) report.review.push({ message: '候选缺少 CHANGELOG，无法评估版本变化', evidence: packageDir });
     report.changelogSource = existsSync(changelog) ? 'CHANGELOG.md' : null;
     if (baseline && baseline.version !== version && existsSync(changelog)) {
       const headings = [...read(changelog).matchAll(/^##\s+\[?v?(\d+\.\d+\.\d+[^\s\]]*)/gm)].map(m => m[1]);
@@ -361,14 +390,19 @@ export async function main(args = process.argv.slice(2), { run = runFile, snapsh
     const snapshot = { schemaVersion: 1, version, reviewed: !!options.accept, inventory: current.inventory, evidence: current.evidence, signatures: current.signatures };
     if (options.accept && report.incompatible.length) report.review.push({ message: '存在不兼容，未接受快照', evidence: snapshotPath });
     if (options.accept && !report.incompatible.length) {
-      writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2) + '\n');
-      report.review = report.review.filter(i => !/尚无人确认基线|版本漂移|^新增 |^声明变化 /.test(i.message));
-      report.accepted = true;
-    } else if (!baseline && !options.accept) { writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2) + '\n'); report.generatedSnapshot = true; }
+      // Defer the mutation until every process and temporary directory is cleaned up.
+      report.review = report.review.filter(i => !/尚无人确认基线|基线格式缺失或未知|版本漂移|^新增 |^声明变化 /.test(i.message));
+      report.accepted = true; report.baseline = { present: true, reviewed: true, schemaVersion: 1, version };
+    }
+    report.candidateSnapshot = snapshot;
     report.exitCode = report.incompatible.length ? 1 : report.review.length ? 2 : 0;
+    // Cleanup is part of inspection: never print an incompatibility before cleanup can fail.
+    await scope.cleanup();
+    remove(temp, { recursive: true, force: true }); temp = null;
+    if (report.accepted) writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2) + '\n');
     if (options.json) console.log(JSON.stringify(report, null, 2));
     else {
-      console.log(`Pi ${version}（${command}）\n来源置信度：${report.confidence}`);
+      console.log(`Pi ${version}（${command}）\n来源置信度：${report.confidence}\n基线确认：${report.baseline.reviewed ? '已确认' : '待确认'}（schema ${report.baseline.schemaVersion ?? '缺失'}）`);
       for (const [key, title] of [['incompatible', '不兼容'], ['review', '新增待评估'], ['passed', '通过']]) {
         console.log(`\n${title}（${report[key].length}）`);
         for (const row of report[key]) console.log(`- ${row.message}\n  证据：${row.evidence}`);
@@ -378,9 +412,14 @@ export async function main(args = process.argv.slice(2), { run = runFile, snapsh
     }
     return report.exitCode;
   } catch (error) {
-    const result = { exitCode: 3, error: `无法检查：${error.message}` };
-    console[options?.json || args.includes('--json') ? 'log' : 'error'](options?.json || args.includes('--json') ? JSON.stringify(result) : result.error);
+    try { await scope.cleanup(); if (temp) { remove(temp, { recursive: true, force: true }); temp = null; } }
+    catch (cleanupError) { error = new Error(`${error.message}；清理失败：${cleanupError.message}`); }
+    const result = { baseline: baselineState, exitCode: 3, error: `无法检查：${error.message}` };
+    console[options?.json || args.includes('--json') ? 'log' : 'error'](options?.json || args.includes('--json') ? JSON.stringify(result) : `${result.error}\n基线确认：${baselineState.reviewed ? '已确认' : '待确认'}`);
     return 3;
-  } finally { if (temp) rmSync(temp, { recursive: true, force: true }); }
+  } finally {
+    try { await scope.cleanup(); if (temp) remove(temp, { recursive: true, force: true }); }
+    catch (error) { console.error(`无法检查：清理失败：${error.message}`); }
+  }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) process.exitCode = await main();

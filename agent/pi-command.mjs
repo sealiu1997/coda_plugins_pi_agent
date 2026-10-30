@@ -7,6 +7,26 @@ import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
+export const MIN_PI_VERSION = '1.1.0';
+export const VERIFIED_PI_VERSION = MIN_PI_VERSION;
+
+export const parsePiVersion = output => String(output ?? '').match(/\b\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?\b/)?.[0] ?? null;
+
+export function supportedVersion(version) {
+  const parts = /^(\d+)\.(\d+)\.(\d+)(?:\+[^ ]+)?$/.exec(version ?? '');
+  if (!parts) return false;
+  const minimum = MIN_PI_VERSION.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const n = Number(parts[i + 1]);
+    if (n !== minimum[i]) return n > minimum[i];
+  }
+  return true;
+}
+export function assertPiVersion(version, command) {
+  if (!supportedVersion(version)) throw new Error(`Pi ${version ?? '版本未知'}（${command}）不满足最低版本 ${MIN_PI_VERSION}。请自行升级该 Pi：npm i -g ${PACKAGE}@${VERIFIED_PI_VERSION}，或将 pi.commandPath 改回 pi 后重新准备运行环境。`);
+  return version;
+}
+
 export const PACKAGE = '@earendil-works/pi-coding-agent';
 
 // The npm prefix setup installs Pi into: the plugin's state, none for a backend without one.
@@ -15,8 +35,10 @@ export const managedPrefix = (env = process.env) => env.CODA_PLUGIN_STATE ? join
 // The Pi this plugin installed itself: where the agent looks for it here and where setup installs and repairs it.
 export const managedPi = (env = process.env) => {
   const prefix = managedPrefix(env);
-  return prefix ? join(prefix, 'bin', 'pi') : null;
+  return prefix ? join(prefix, 'node_modules', '.bin', 'pi') : null;
 };
+
+export const legacyManagedPi = (env = process.env) => managedPrefix(env) ? join(managedPrefix(env), 'bin', 'pi') : null;
 
 const isExecutableFile = path => {
   try {
@@ -35,7 +57,7 @@ export function findPi(settings, { env = process.env, home = homedir(), usable =
   if (onPath) return onPath;
   const own = managedPi(env);
   return [join(home, '.npm-global/bin/pi'), '/opt/homebrew/bin/pi', '/usr/local/bin/pi', join(home, '.local/bin/pi'), join(home, '.bun/bin/pi'),
-    ...(own ? [own] : [])].find(usable) ?? 'pi';
+    ...(own ? [own, legacyManagedPi(env)] : [])].find(usable) ?? 'pi';
 }
 
 const runFile = promisify(execFile);
@@ -47,7 +69,7 @@ export async function piVersion(piCommand, { timeout = 5000, fallback = null } =
   if (!versionCache.has(piCommand)) {
     try {
       const { stdout } = await runFile(piCommand, ['--version'], { timeout });
-      versionCache.set(piCommand, stdout.trim().match(/[\d][\w.+-]*/)?.[0] ?? null);
+      versionCache.set(piCommand, parsePiVersion(stdout));
     } catch (e) {
       process.stderr.write(`[pi-agent] pi --version failed: ${e.message}\n`);
       versionCache.set(piCommand, null);

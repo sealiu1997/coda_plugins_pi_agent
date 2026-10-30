@@ -123,5 +123,17 @@
   "files": [
     "agent",
     "icons"
-  ]
+  ],
+  "devDependencies": {
+    "@coda-console/plugin-check": "0.5.7"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check:coda": "coda-plugin-check . --manifest && node scripts/check-fake-live.mjs --handshake",
+    "check:pi": "node scripts/check-pi-compat.mjs",
+    "check:pi:verified": "node scripts/check-pi-compat.mjs --install 1.1.0",
+    "check:fake-live": "node scripts/check-fake-live.mjs",
+    "check:real-live": "coda-plugin-check . --live",
+    "probe:upstream": "node scripts/probe-upstream.mjs"
+  }
 }

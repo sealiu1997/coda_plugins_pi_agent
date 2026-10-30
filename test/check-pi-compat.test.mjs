@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Writable, PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
-import { declarations, members, splitTop, inspectPackage, compare, probe, checkProbe, parseArgs, changelogBetween, locatePackage, main } from '../scripts/check-pi-compat.mjs';
+import { declarations, members, splitTop, inspectPackage, compare, probe, checkProbe, parseArgs, changelogBetween, locatePackage, main, PROBE_COMMANDS } from '../scripts/check-pi-compat.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const surface = JSON.parse(readFileSync(join(root, 'compat/pi-surface.json')));
@@ -23,7 +23,7 @@ test('surface entries have real source evidence; every literal RPC send and CLI 
   for (const [file, text] of Object.entries(source)) {
     const code = uncomment(file === 'agent/setup.mjs' ? text.slice(0,text.indexOf('  const npm =')) : text);
     for (const m of code.matchAll(/\.send\(['"]([^'"]+)['"]/g)) assert.ok(surface.dependencies.commands.some(d => d.name === m[1] && d.sources.includes(file)), `${file}: ${m[1]}`);
-    for (const m of code.matchAll(/['"](--[\w-]+|-e)['"]/g)) assert.ok(surface.dependencies.cli.some(d => d.name === m[1] && d.sources.includes(file)), `${file}: ${m[1]}`);
+    for (const m of code.matchAll(/['"](--[\w-]+=?|-e=?)['"]/g)) assert.ok(surface.dependencies.cli.some(d => d.name === m[1] && d.sources.includes(file)), `${file}: ${m[1]}`);
     for (const m of code.matchAll(/pi\.(register\w+)\(/g)) assert.ok(surface.dependencies.extensionApi.some(d => d.name === m[1] && d.sources.includes(file)));
   }
 });
@@ -67,9 +67,10 @@ function fixture(t) {
   return dir;
 }
 const help = 'Options:\n  --mode <mode>      Output\n  --no-session       Ephemeral\n  --extension, -e <path>   Extension\n';
+const probeResults = () => Object.fromEntries(PROBE_COMMANDS.map(name => [name, {type:'response',command:name,success:true,data:{thinkingLevel:'off'}}]));
 const minimal = { dependencies: {commands: [{name:'get_state',sources:['agent/entry.mjs']}], events:[], cli:[], extensionApi:[]}, contracts: [{scope:'response',symbol:'get_state',fields:{'data.model.id':'string','data.thinkingLevel':'string'},sources:['agent/entry.mjs'],optional:['data.model.id']}] };
 function current(t) { return {...inspectPackage(fixture(t), help), version:'1.0.0'}; }
-function baseline(c) { return {version:c.version, reviewed:true, inventory:c.inventory, signatures:c.signatures}; }
+function baseline(c) { return {schemaVersion:1, version:c.version, reviewed:true, inventory:c.inventory, signatures:c.signatures}; }
 
 test('declaration parser handles comments, nested objects, unions, generics, aliases and inheritance', t => {
   assert.deepEqual(splitTop('{a: string; b: number;} | string', '|'), ['{a: string; b: number;}', 'string']);
@@ -159,7 +160,7 @@ test('probe early exit and spawn error reject and clean up', async t => {
   await assert.rejects(probe('/fake/pi',temporary(t),{spawnFn:()=>fakeChild({hang:true,exitEarly:true})}),/提前退出/);
   const child = fakeChild({hang:true});
   await assert.rejects(probe('/fake/pi',temporary(t),{spawnFn:()=>{queueMicrotask(()=>child.emit('error',new Error('ENOENT')));return child;}}),/ENOENT/);
-  assert.deepEqual(child.signals,['SIGTERM']);
+  assert.deepEqual(child.signals,[], 'spawn error without a PID has no process to signal');
 });
 
 test('runtime field and envelope failures are incompatible; optional absent and empty arrays are valid', () => {
@@ -184,17 +185,16 @@ test('package location follows npm symlinks and literal shell wrappers, rejects 
   assert.throws(()=>locatePackage(write(temporary(t),'unknown','#!/bin/sh\nexit 0')),/无法/);
 });
 
-test('main generates unreviewed baseline; accept is explicit; ordinary runs preserve snapshot', async t => {
+test('main never writes an unaccepted baseline; accept is explicit; ordinary runs preserve snapshot', async t => {
   const dir = fixture(t), snapshotPath = join(dir,'snapshot.json'), surfacePath = write(dir,'surface.json',JSON.stringify({...minimal,contracts:[]}));
   const executable = write(dir,'dist/cli.js',`#!${process.execPath}\nconsole.log('1.0.0');\n`);
   // piVersion invokes the fake binary; --help and probes use injected executors.
   const {chmodSync} = await import('node:fs'); chmodSync(executable,0o755);
-  const opts = {snapshotPath,surfacePath,run:async()=>({stdout:help}),probeFn:async()=>({})};
+  const opts = {snapshotPath,surfacePath,run:async(_,args)=>({stdout:args.includes('--version') ? '1.0.0' : help}),probeFn:async()=>probeResults()};
   const originalLog = console.log; const output = []; console.log = s=>output.push(s); t.after(()=>{console.log=originalLog;});
   assert.equal(await main(['--pi',executable,'--json'],opts),2);
-  assert.equal(JSON.parse(readFileSync(snapshotPath)).reviewed,false);
-  const before = readFileSync(snapshotPath,'utf8');
-  assert.equal(await main(['--pi',executable,'--json'],opts),2); assert.equal(readFileSync(snapshotPath,'utf8'),before);
+  assert.equal(existsSync(snapshotPath),false);
+  assert.equal(await main(['--pi',executable,'--json'],opts),2); assert.equal(existsSync(snapshotPath),false);
   assert.equal(await main(['--pi',executable,'--accept','--json'],opts),0);
   assert.equal(JSON.parse(readFileSync(snapshotPath)).reviewed,true);
   assert.equal(await main(['--pi',executable,'--json'],opts),0);
@@ -226,6 +226,9 @@ test('candidate install uses a temporary prefix and npm cache and removes them',
   const originalLog=console.log; console.log=()=>{}; t.after(()=>{console.log=originalLog;});
   const run = async (command,args,options) => {
     if (args.includes('install')) {
+      assert.ok(args.includes('--ignore-scripts'));
+      assert.equal(options.env.OPENAI_API_KEY, undefined); assert.equal(options.env.CODA_PLUGIN_SECRETS, undefined);
+      assert.equal(options.env.HOME, options.cwd);
       assert.equal(command,node); assert.equal(args[0],join(dirname(node),'../lib/node_modules/npm/bin/npm-cli.js'));
       prefix=args[args.indexOf('--prefix')+1]; cache=args[args.indexOf('--cache')+1];
       assert.ok(prefix.startsWith(options.cwd)); assert.ok(cache.startsWith(options.cwd));
@@ -235,8 +238,100 @@ test('candidate install uses a temporary prefix and npm cache and removes them',
       const {chmodSync}=await import('node:fs'); chmodSync(bin,0o755); mkdirSync(join(prefix,'bin')); symlinkSync(bin,join(prefix,'bin/pi'));
       return {stdout:''};
     }
-    return {stdout:help};
+    return {stdout:args.includes('--version') ? '1.0.0' : help};
   };
-  assert.equal(await main(['--install','1.0.0','--json'],{run,snapshotPath,surfacePath,probeFn:async()=>({})}),2);
+  assert.equal(await main(['--install','1.0.0','--json'],{run,snapshotPath,surfacePath,probeFn:async()=>probeResults()}),2);
   assert.equal(existsSync(prefix),false); assert.equal(existsSync(cache),false);
+});
+
+test('only a complete schema and reviewed === true can be a passing baseline', t => {
+  const c = current(t), good = baseline(c);
+  for (const reviewed of [false, undefined, null, 'true', 1, {}, []]) {
+    assert.ok(compare(minimal, c, {...good, reviewed}).review.some(r => r.message.includes('尚无人确认')));
+  }
+  for (const broken of [{...good,schemaVersion:2},{...good,inventory:{}},{...good,signatures:{}},{...good,inventory:undefined}]) {
+    assert.ok(compare(minimal,c,broken).review.some(r => r.message.includes('基线格式')));
+  }
+});
+
+test('unparseable CLI signature (including CLAUDE help text), missing declarations and unknown types need review', t => {
+  const c = current(t), b = structuredClone(baseline(c));
+  const s = {...minimal,dependencies:{...minimal.dependencies,cli:[{name:'--mode',takesValue:true,sources:['x']}]}};
+  delete c.signatures.cli['--mode'];
+  assert.ok(compare(s,c,b).review.some(r => r.message.includes('CLI 签名')));
+  c.responses.get_state = [];
+  assert.ok(compare(s,c,b).review.some(r => r.message.includes('无法解析形状')));
+  delete c.signatures.types.RpcSessionState;
+  assert.ok(compare(s,c,b).review.some(r => r.message.includes('声明消失')));
+  const docOnly = {...inspectPackage(fixture(t), '  --mode <mode>\n  --no-context-files CLAUDE.md\n'),version:'1.0.0'};
+  assert.ok(compare(s,docOnly,b).review.some(r => r.message.includes('CLI 签名')));
+});
+
+test('every Pi transmission path and equals-form flag has a source contract', () => {
+  const commands = new Set(surface.dependencies.commands.map(d=>d.name));
+  for (const [file, text] of Object.entries(source)) {
+    if (file === 'agent/pi-rpc.mjs') continue; // central serializer is checked below
+    const code = uncomment(text);
+    for (const call of code.matchAll(/\b(?:session\.)?pi\??\.(send|write)\(([^\n]+)/g)) {
+      if (call[1] === 'send') {
+        const name = call[2].match(/^['"]([^'"]+)['"]/)?.[1];
+        assert.ok(commands.has(name), `${file}: unresolved send ${call[0]}`);
+      } else {
+        const literal = call[2].match(/^\{\s*type:\s*['"]([^'"]+)['"]/)?.[1];
+        if (literal) assert.equal(literal, 'extension_ui_response');
+        else assert.match(call[2], /^resp\)/); // every resp initializer below is inventoried
+      }
+    }
+    for (const init of code.matchAll(/const resp = \{\s*type:\s*'([^']+)'/g)) assert.equal(init[1],'extension_ui_response');
+    if (file !== 'agent/pi-rpc.mjs') assert.doesNotMatch(code, /(?:_child|child)\.stdin\.write/);
+  }
+  assert.equal((source['agent/pi-rpc.mjs'].match(/this\._child\.stdin\.write/g) ?? []).length,2);
+  const contract = surface.contracts.find(c=>c.symbol==='RpcExtensionUIResponse');
+  for (const field of ['type','id','cancelled','confirmed','value']) assert.ok(contract.fields[field]);
+  for (const name of ['--extension','-e','--extension=','-e=']) assert.ok(surface.dependencies.cli.some(d=>d.name===name));
+});
+
+test('cleanup failure overrides incompatibility and never accepts or writes a baseline', async t => {
+  const dir = fixture(t), snapshotPath=join(dir,'snapshot.json');
+  const executable=write(dir,'dist/cli.js','not executed');
+  const surfacePath=write(dir,'surface.json',JSON.stringify({...minimal,dependencies:{...minimal.dependencies,commands:[{name:'removed',sources:['x']}]}}));
+  const logs=[]; const old=console.log; console.log=s=>logs.push(s); t.after(()=>{console.log=old;});
+  const run=async(_,args)=>({stdout:args.includes('--version')?'1.0.0':help});
+  assert.equal(await main(['--pi',executable,'--accept','--json'],{run,snapshotPath,surfacePath,probeFn:async()=>probeResults(),remove:path=>{t.after(()=>rmSync(path,{recursive:true,force:true}));throw new Error('denied cleanup');}}),3);
+  assert.equal(existsSync(snapshotPath),false);
+  assert.equal(JSON.parse(logs[0]).exitCode,3);
+  assert.match(JSON.parse(logs[0]).error,/cleanup/);
+});
+
+test('missing probe replies cannot silently pass', async t => {
+  const dir=fixture(t), executable=write(dir,'dist/cli.js','not executed');
+  const surfacePath=write(dir,'surface.json',JSON.stringify({...minimal,contracts:[]}));
+  const old=console.log; console.log=()=>{}; t.after(()=>{console.log=old;});
+  assert.equal(await main(['--pi',executable,'--json'],{surfacePath,snapshotPath:join(dir,'snapshot.json'),run:async(_,args)=>({stdout:args.includes('--version')?'1.0.0':help}),probeFn:async()=>({})}),3);
+});
+
+test('accepting unresolved evidence cannot produce a green report', async t => {
+  const dir=fixture(t),exe=write(dir,'dist/cli.js','fixture');
+  const s={...minimal,contracts:[{...minimal.contracts[0],symbol:'UnresolvedRequiredType'}]};
+  const surfacePath=write(dir,'surface.json',JSON.stringify(s)),snapshotPath=join(dir,'snapshot.json');
+  const old=console.log,logs=[];console.log=s=>logs.push(s);t.after(()=>{console.log=old;});
+  const options={surfacePath,snapshotPath,run:async(_,args)=>({stdout:args.includes('--version')?'1.0.0':help}),probeFn:async()=>probeResults()};
+  assert.equal(await main(['--pi',exe,'--accept','--json'],options),2);
+  assert.equal(JSON.parse(logs.at(-1)).baseline.reviewed,true);
+  assert.equal(await main(['--pi',exe,'--json'],options),2);
+});
+
+test('unknown RPC success states and missing required nested values never pass', () => {
+  for (const success of [undefined,null,'true',1,'unknown']) assert.ok(checkProbe({get_state:{type:'response',command:'get_state',success,data:{thinkingLevel:'off'}}},minimal).failures.length);
+  assert.ok(checkProbe({get_state:{type:'response',command:'get_state',success:true,data:{}}},minimal).failures.length);
+});
+
+
+test('malformed JSON and null RPC output reject while still reaping the child', async t => {
+  for (const output of ['null\n','[]\n','invalid json\n']) {
+    const child=fakeChild({hang:true});
+    child.stdin = new Writable({write(_,encoding,done) {queueMicrotask(()=>child.stdout.write(output));done();}});
+    await assert.rejects(probe('/fake/pi',temporary(t),{spawnFn:()=>child}),/JSON|RPC/);
+    assert.deepEqual(child.signals,['SIGTERM']);
+  }
 });

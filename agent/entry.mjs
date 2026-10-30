@@ -5,7 +5,7 @@ import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readLines } from './lines.mjs';
 import { PiRpc, piProcesses } from './pi-rpc.mjs';
-import { findPi, piVersion } from './pi-command.mjs';
+import { findPi, piVersion, assertPiVersion } from './pi-command.mjs';
 import { PI_MODE, buildConfigOptions, isDefaultSentinel, modelValue, parseModelValue } from './config-options.mjs';
 import { readSessionDefaults, writeSessionDefaults } from './session-defaults.mjs';
 import { classifyPiFailure, isPiAuthError, getBase64DecodedSize } from './errors.mjs';
@@ -73,13 +73,8 @@ class SessionState {
 // Where Pi is: a path set in Coda, the PATH, the usual directories, else the copy setup installed (agent/pi-command.mjs).
 const piCommand = findPi(settings);
 
-// The version of the Pi that will actually run, resolved and cached for the process; the plugin's own
-// package.json version stands in when the real one cannot be read.
-const pluginVersion = () => {
-  try { return JSON.parse(readFileSync(join(pluginPath, 'package.json'), 'utf8')).version ?? 'unknown'; }
-  catch { return 'unknown'; }
-};
-const getPiVersion = () => piVersion(piCommand, { fallback: pluginVersion });
+// Refuse unsupported or unknown Pi versions before opening any session.
+const getPiVersion = async () => assertPiVersion(await piVersion(piCommand), piCommand);
 
 // ---- Build available commands ----
 function buildAvailableCommands(session) {
@@ -234,6 +229,7 @@ async function ensurePiRunning(session) {
 
 // ---- Spawn pi for a session ----
 async function spawnPi(session, systemPromptFile, extraArgs = [], mcpServers = {}) {
+  await getPiVersion();
   const args = ['--mode', 'rpc', '--session-id', session.sessionId, ...extraArgs];
   // The providers set in Coda (`pi.providers`), registered by an extension that lists their models as Pi starts.
   if (Object.keys(settings['pi.providers'] ?? {}).length) args.push('--extension', join(pluginPath, 'agent', 'providers.mjs'));

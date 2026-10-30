@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "version": "1.1.0",
-  "reviewed": false,
+  "reviewed": true,
   "inventory": {
     "commands": [
       "abort",
@@ -437,7 +437,24 @@
       "--no-approve": ", -na",
       "--offline": "",
       "--help": ", -h",
-      "--version": ", -v"
+      "--version": ", -v",
+      "-p": "",
+      "-c": "",
+      "-r": "",
+      "-n": "<name>",
+      "-nt": "",
+      "-nbt": "",
+      "-t": "<tools>",
+      "-xt": "<tools>",
+      "-e": "<path>",
+      "-ne": "",
+      "-ns": "",
+      "-np": "",
+      "-nc": "",
+      "-a": "",
+      "-na": "",
+      "-h": "",
+      "-v": ""
     },
     "types": {
       "RpcSessionState": "{ model?: Model<any>; thinkingLevel: ThinkingLevel; isStreaming: boolean; isCompacting: boolean; steeringMode: \"all\" | \"one-at-a-time\"; followUpMode: \"all\" | \"one-at-a-time\"; sessionFile?: string; sessionId: string; sessionName?: string; autoCompactionEnabled: boolean; messageCount: number; pendingMessageCount: number; }",

@@ -1,9 +1,10 @@
 // Parse the extra Pi CLI arguments set in Coda. The main RPC process gets all of them;
 // the isolated title process only needs explicit extensions so provider models resolve.
 export function parsePiExtraArgs(value) {
-  if (Array.isArray(value)) return value.map(String);
-  if (typeof value === 'string') return value.split(/\s+/).filter(Boolean);
-  return [];
+  const args = Array.isArray(value) ? value.map(String) : typeof value === 'string' ? value.split(/\s+/).filter(Boolean) : [];
+  // Pi 1.1.0 accepts separated values; Coda also accepts equals forms.
+  return args.flatMap(arg => arg.startsWith('--extension=') ? ['--extension', arg.slice('--extension='.length)]
+    : arg.startsWith('-e=') ? ['-e', arg.slice(3)] : [arg]);
 }
 
 export function extensionPathsFromArgs(args) {

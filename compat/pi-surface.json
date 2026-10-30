@@ -198,6 +198,22 @@
           "agent/pi-command.mjs"
         ],
         "takesValue": false
+      },
+      {
+        "name": "--extension=",
+        "normalizedTo": "--extension",
+        "takesValue": true,
+        "sources": [
+          "agent/pi-args.mjs"
+        ]
+      },
+      {
+        "name": "-e=",
+        "normalizedTo": "-e",
+        "takesValue": true,
+        "sources": [
+          "agent/pi-args.mjs"
+        ]
       }
     ],
     "events": [
@@ -560,23 +576,25 @@
       "symbol": "tool_execution_update",
       "fields": {
         "toolCallId": "string",
-        "partialResult.content": "array"
+        "partialResult": "any"
       },
       "sources": [
         "agent/entry.mjs"
-      ]
+      ],
+      "note": "Pi explicitly declares this payload as any; mapToolResultContent checks Array.isArray before reading blocks. No nested shape required."
     },
     {
       "scope": "event",
       "symbol": "tool_execution_end",
       "fields": {
         "toolCallId": "string",
-        "result.content": "array",
-        "isError": "boolean"
+        "isError": "boolean",
+        "result": "any"
       },
       "sources": [
         "agent/entry.mjs"
-      ]
+      ],
+      "note": "Pi explicitly declares this payload as any; mapToolResultContent checks Array.isArray before reading blocks. No nested shape required."
     },
     {
       "scope": "event",
@@ -737,7 +755,8 @@
         "id": "string",
         "value": "string",
         "confirmed": "boolean",
-        "cancelled": "boolean"
+        "cancelled": "boolean",
+        "type": "string"
       },
       "sources": [
         "agent/entry.mjs"
