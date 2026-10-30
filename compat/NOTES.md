@@ -16,7 +16,7 @@ node scripts/check-pi-compat.mjs --accept
 
 `pi-surface.json` 是插件依赖的唯一清单，每个接口、字段、枚举都有 agent 源文件证据。`package.json` 中暴露给 Coda 的 settings.json/models.json 也记录在清单里；agent 本身不解析这些 Pi 配置文件，没有固定依赖的 Pi 设置键。Coda 的 `pi.*` 设置不算 Pi 的 Settings。修改插件接口时同步更新清单；测试核对显式 RPC 发送、CLI 字符串、扩展调用、事件分支和消费的 record 字段。
 
-`pi-snapshot.json` 保存版本、全量已发现的命令、事件、CLI 参数、扩展方法、设置键（含嵌套键）、扩展 UI 方法及声明签名。普通检查（包括缺少快照时）绝不写仓库；候选位于 JSON 报告的 `candidateSnapshot`。只有显式 `--accept` 才写入快照并标记人工确认。只有完整的 schemaVersion 1、`reviewed === true` 才可能返回 0；人读和 JSON 报告始终说明基线确认状态。1.4.0 快照在契约核对和 fake live 后确认；插件最低仍支持 1.1.0，开发锁文件把人工验证候选固定在 1.4.0，版本与运行时代码由测试交叉核对。
+`pi-snapshot.json` 保存版本、全量已发现的命令、事件、CLI 参数、扩展方法、设置键（含嵌套键）、扩展 UI 方法及声明签名。普通检查（包括缺少快照时）绝不写仓库；候选位于 JSON 报告的 `candidateSnapshot`。只有显式 `--accept` 才写入快照并标记人工确认。只有完整的 schemaVersion 1、`reviewed === true` 才可能返回 0；人读和 JSON 报告始终说明基线确认状态。1.4.0 快照在契约核对和 fake live 后确认。运行时最低版本门槛为 1.1.0；1.1.0 尚未完成人工兼容确认，固定自动化验证版本为 1.4.0，版本与运行时代码由测试交叉核对。
 
 来源按以下优先级读取，完全不导入执行 Pi 的 JS：
 

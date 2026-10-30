@@ -5,9 +5,11 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join, normalize } from 'node:path';
@@ -18,6 +20,7 @@ import {
   managedPi,
   managedPrefix,
   parsePiVersion,
+  supportedVersion,
   versionOf,
 } from './pi-command.mjs';
 
@@ -204,6 +207,8 @@ const packageInstallationPaths = prefix => ({
   command: join(prefix, 'bin', 'pi'),
   lock: join(prefix, 'lib', 'node_modules', '.package-lock.json'),
 });
+const updateLock = prefix => join(prefix, '.coda-pi-update.lock');
+const backupPrefix = '.coda-pi-backup-';
 
 const pathExists = path => {
   try {
@@ -215,44 +220,183 @@ const pathExists = path => {
   }
 };
 
+const writeTransaction = (backupRoot, transaction) => writeFileSync(
+  join(backupRoot, 'transaction.json'),
+  `${JSON.stringify(transaction, null, 2)}\n`,
+);
+
+const readTransaction = backupRoot => {
+  const manifest = join(backupRoot, 'transaction.json');
+  try {
+    const transaction = JSON.parse(readFileSync(manifest, 'utf8'));
+    if (transaction?.schemaVersion !== 1 || !Array.isArray(transaction.states)) {
+      throw new Error('事务清单格式不支持');
+    }
+    return transaction;
+  } catch (error) {
+    throw new Error(`无法读取 Pi 更新备份 ${manifest}：${error.message}`);
+  }
+};
+
+const processIsAlive = pid => {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+};
+
+function restoreTransaction(backupRoot, transaction) {
+  let firstError = null;
+  for (const state of transaction.states) {
+    try {
+      const backup = join(backupRoot, state.name);
+      const backupExists = pathExists(backup);
+      if (state.existed) {
+        if (backupExists) {
+          rmSync(state.path, { recursive: true, force: true });
+          mkdirSync(dirname(state.path), { recursive: true });
+          renameSync(backup, state.path);
+        } else if (state.moved && !pathExists(state.path)) {
+          // A previous recovery can be interrupted after moving the backup back but before
+          // persisting moved=false. Recover that state without requiring a second backup.
+          throw new Error(`备份缺少 ${state.name}`);
+        }
+        state.moved = false;
+      } else {
+        rmSync(state.path, { recursive: true, force: true });
+      }
+      state.restored = true;
+      writeTransaction(backupRoot, transaction);
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (firstError) throw firstError;
+}
+
+export function recoverInterruptedInstallation(prefix) {
+  if (!pathExists(prefix)) return false;
+  const backups = readdirSync(prefix, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && entry.name.startsWith(backupPrefix))
+    .map(entry => join(prefix, entry.name))
+    .sort();
+  if (!backups.length) return false;
+  if (backups.length > 1) {
+    throw new Error(`检测到多个未完成的 Pi 更新备份，请人工检查：${backups.join(', ')}`);
+  }
+  const backupRoot = backups[0];
+  const transaction = readTransaction(backupRoot);
+  if (transaction.phase !== 'committed') {
+    transaction.phase = 'rollback';
+    writeTransaction(backupRoot, transaction);
+    restoreTransaction(backupRoot, transaction);
+  }
+  rmSync(backupRoot, { recursive: true, force: true });
+  return true;
+}
+
+function acquireUpdateLock(prefix) {
+  mkdirSync(prefix, { recursive: true });
+  const lock = updateLock(prefix);
+  const owner = {
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    token: `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  };
+  const createLock = () => {
+    mkdirSync(lock);
+    writeFileSync(join(lock, 'owner.json'), JSON.stringify(owner));
+  };
+  try {
+    createLock();
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    let existing = null;
+    try {
+      existing = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'));
+    } catch {}
+    if (processIsAlive(existing?.pid)) {
+      throw new Error(`另一个 Pi 更新正在进行（PID ${existing.pid}）：${lock}`);
+    }
+    // Avoid taking a lock another process has created but has not populated yet.
+    if (!existing) {
+      try {
+        if (Date.now() - lstatSync(lock).mtimeMs < 10_000) {
+          throw new Error(`另一个 Pi 更新正在初始化：${lock}`);
+        }
+      } catch (statError) {
+        if (statError.message.startsWith('另一个 Pi 更新')) throw statError;
+      }
+    }
+    rmSync(lock, { recursive: true, force: true });
+    createLock();
+  }
+  try {
+    recoverInterruptedInstallation(prefix);
+  } catch (recoveryError) {
+    // Keep both the backup and lock. A failed restore must be inspectable and must block a new
+    // npm install from overwriting the remaining recovery evidence.
+    throw new Error(`${recoveryError.message}；未完成备份保留在 ${prefix}`);
+  }
+  return () => {
+    let current = null;
+    try {
+      current = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'));
+    } catch {}
+    if (current?.token === owner.token) rmSync(lock, { recursive: true, force: true });
+  };
+}
+
 // npm can return non-zero after changing a global prefix, and a syntactically successful install
 // can still leave an unusable entrypoint. Keep the previous package, command and npm lockfile in
 // the same filesystem and restore them when installation or verification fails.
 function backupInstallation(prefix) {
-  mkdirSync(prefix, { recursive: true });
-  const backupRoot = mkdtempSync(join(prefix, '.coda-pi-backup-'));
-  const paths = packageInstallationPaths(prefix);
+  const releaseLock = acquireUpdateLock(prefix);
+  let backupRoot;
+  let transaction;
+  try {
+    backupRoot = mkdtempSync(join(prefix, backupPrefix));
+    const paths = packageInstallationPaths(prefix);
+    transaction = {
+      schemaVersion: 1,
+      phase: 'backup',
+      states: Object.entries(paths).map(([name, path]) => ({
+        name,
+        path,
+        existed: pathExists(path),
+        moved: false,
+        restored: false,
+      })),
+    };
+  } catch (error) {
+    releaseLock();
+    throw error;
+  }
   const restore = () => {
-    let firstError = null;
-    for (const [name, path] of Object.entries(paths)) {
-      try {
-        rmSync(path, { recursive: true, force: true });
-      } catch (error) {
-        firstError ??= error;
-      }
-      const backup = join(backupRoot, name);
-      if (!pathExists(backup)) continue;
-      try {
-        mkdirSync(dirname(path), { recursive: true });
-        renameSync(backup, path);
-      } catch (error) {
-        firstError ??= error;
-      }
-    }
     try {
-      rmSync(backupRoot, { recursive: true, force: true });
+      transaction.phase = 'rollback';
+      writeTransaction(backupRoot, transaction);
+      restoreTransaction(backupRoot, transaction);
     } catch (error) {
-      firstError ??= error;
+      throw new Error(`${error.message}；未完成备份保留在 ${backupRoot}`);
     }
-    if (firstError) throw firstError;
+    rmSync(backupRoot, { recursive: true, force: true });
+    releaseLock();
   };
 
   try {
-    for (const [name, path] of Object.entries(paths)) {
-      if (!pathExists(path)) continue;
-      const backup = join(backupRoot, name);
-      renameSync(path, backup);
+    writeTransaction(backupRoot, transaction);
+    for (const state of transaction.states) {
+      if (!state.existed) continue;
+      renameSync(state.path, join(backupRoot, state.name));
+      state.moved = true;
+      writeTransaction(backupRoot, transaction);
     }
+    transaction.phase = 'install';
+    writeTransaction(backupRoot, transaction);
   } catch (error) {
     try {
       restore();
@@ -265,7 +409,15 @@ function backupInstallation(prefix) {
   return {
     restore,
     commit() {
-      rmSync(backupRoot, { recursive: true, force: true });
+      transaction.phase = 'committed';
+      writeTransaction(backupRoot, transaction);
+      try {
+        rmSync(backupRoot, { recursive: true, force: true });
+      } catch {
+        // The new installation has already run and passed verification. Keep the committed
+        // backup for the next setup run to clean instead of turning success into a rollback.
+      }
+      try { releaseLock(); } catch {}
     },
   };
 }
@@ -321,6 +473,9 @@ export function updateLatest({
     const afterComparison = compareVersions(version, latest);
     if (afterComparison === null || afterComparison < 0) {
       throw new Error(`安装完成，但 Pi ${version} 仍低于 npm latest ${latest}`);
+    }
+    if (!supportedVersion(version)) {
+      throw new Error(`安装完成，但 Pi ${version} 不是当前插件支持的稳定版本`);
     }
     installation.commit();
   } catch (error) {
