@@ -11,7 +11,7 @@ const temp = mkdtempSync(join(tmpdir(), 'pi-upstream-')), scope = new ProcessSco
 const node = process.env.CODA_NODE || process.execPath;
 const env = { ...minimalEnv(temp), PATH: `${dirname(node)}:${minimalEnv(temp).PATH}` }, results = [];
 const npm = join(dirname(node), '../lib/node_modules/npm/bin/npm-cli.js');
-const run = (command, args, options = {}) => scope.run(command, args, { cwd: temp, env, timeout: 120000, grace: 3000, ...options });
+const run = (command, args, options = {}) => scope.run(command, args, { cwd: temp, env, timeout: 60000, grace: 3000, ...options });
 const save = (name, text) => writeFileSync(join(output, name), text);
 try {
   try {
