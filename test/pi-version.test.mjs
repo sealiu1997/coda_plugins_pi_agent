@@ -105,7 +105,7 @@ test('runtime version floor rejects old, unknown and prerelease versions with up
   const { supportedVersion, assertPiVersion } = await import('../agent/pi-command.mjs');
   for (const value of [null,'?','1.0.99','1.1.0-beta.1','garbage']) {
     assert.equal(supportedVersion(value),false);
-    assert.throws(()=>assertPiVersion(value,'/external/pi'),/最低版本 1.1.0.*原安装方式/);
+    assert.throws(()=>assertPiVersion(value,'/external/pi'),/最低版本 1.1.0.*跟随最新版.*原来的安装工具升级/s);
   }
   for (const value of ['1.1.0','1.1.1','1.10.0','2.0.0','1.1.0+build']) assert.equal(supportedVersion(value),true);
 });

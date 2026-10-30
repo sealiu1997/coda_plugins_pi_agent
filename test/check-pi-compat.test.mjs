@@ -21,12 +21,21 @@ test('surface entries have real source evidence; every literal RPC send and CLI 
     for (const dep of deps) for (const file of dep.sources) assert.ok(source[file]?.includes(dep.name), `${category} ${dep.name}: ${file}`);
   }
   for (const [file, text] of Object.entries(source)) {
-    const code = uncomment(file === 'agent/setup.mjs' ? text.slice(0,text.indexOf('  const npm =')) : text);
+    // setup and pi-runtime invoke npm while managing the device runtime. Their flags are
+    // npm's surface, not Pi CLI options, so they must not leak into compat/pi-surface.json.
+    const code = uncomment(text);
     for (const m of code.matchAll(/\.send\(['"]([^'"]+)['"]/g)) assert.ok(surface.dependencies.commands.some(d => d.name === m[1] && d.sources.includes(file)), `${file}: ${m[1]}`);
     // Setup has no runtime lifecycle flags; its version check is centralized in pi-command.
     if (file === 'agent/setup.mjs') assert.match(code, /versionOf\(launch/);
-    else for (const m of code.matchAll(/['"](--[\w-]+=?|-e=?)['"]/g)) assert.ok(surface.dependencies.cli.some(d => d.name === m[1] && d.sources.includes(file)), `${file}: ${m[1]}`);
+    else if (file !== 'agent/pi-runtime.mjs') {
+      for (const m of code.matchAll(/['"](--[\w-]+=?|-e=?)['"]/g)) {
+        assert.ok(surface.dependencies.cli.some(d => d.name === m[1] && d.sources.includes(file)), `${file}: ${m[1]}`);
+      }
+    }
     for (const m of code.matchAll(/pi\.(register\w+)\(/g)) assert.ok(surface.dependencies.extensionApi.some(d => d.name === m[1] && d.sources.includes(file)));
+  }
+  for (const npmFlag of ['--global', '--prefix', '--ignore-scripts', '--no-audit', '--no-fund']) {
+    assert.equal(surface.dependencies.cli.some(d => d.name === npmFlag), false, `${npmFlag} is npm-only`);
   }
 });
 
