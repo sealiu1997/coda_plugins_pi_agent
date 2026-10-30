@@ -1,0 +1,468 @@
+{
+  "schemaVersion": 1,
+  "upstreamCommit": "5792cd4575f719f2cb28e26063cd2ef0fc3eed90",
+  "codaCommit": "b705ff8840dadc567d2515df4a295d3448e0f995",
+  "contractHash": "a3e80ae94c2e2d40376c43d32d5d7a02f2803273087b4483945ec099d6247d22",
+  "sections": [
+    {
+      "title": "文档前言",
+      "key": "文档前言 [1]",
+      "hash": "87637557ed1d2aadbc9748e7ba29e006075ee929d26ba9de9229aa04388e55d1",
+      "characters": 134
+    },
+    {
+      "title": "Agent 接入协议",
+      "key": "Agent 接入协议 [1]",
+      "hash": "29cb7a3d3e93daa5af5e44e7782cf91a66d9bf2cc7ea9f4c912514562bc64fee",
+      "characters": 811
+    },
+    {
+      "title": "Agent 接入协议 / ACP 部分",
+      "key": "Agent 接入协议 / ACP 部分 [1]",
+      "hash": "00628dc3267278694afa26ac1c12b56410984368d3d4eab3dedbc1b937d56235",
+      "characters": 3586
+    },
+    {
+      "title": "Agent 接入协议 / 会话指令",
+      "key": "Agent 接入协议 / 会话指令 [1]",
+      "hash": "388b5e08d2ae37ac292b4b597ecb5d11c6fb40307268f4fb93998fefb6a84441",
+      "characters": 1346
+    },
+    {
+      "title": "Agent 接入协议 / 插话",
+      "key": "Agent 接入协议 / 插话 [1]",
+      "hash": "271cad16d19bcfcd62a57e393f2dcd1005f1a4f01c52b428aeb56fe84fb6b2fc",
+      "characters": 1213
+    },
+    {
+      "title": "Agent 接入协议 / 执行失败",
+      "key": "Agent 接入协议 / 执行失败 [1]",
+      "hash": "b043c088fbb9913d1427cbabd65bca987259fbf92003de60ea59e6c70bd3668f",
+      "characters": 208
+    },
+    {
+      "title": "Agent 接入协议 / 执行失败 / 额度不足",
+      "key": "Agent 接入协议 / 执行失败 / 额度不足 [1]",
+      "hash": "496d92e85033cdc018dd845543f3e85b273d446bc4260d34c78d65677e68a58c",
+      "characters": 746
+    },
+    {
+      "title": "Agent 接入协议 / 执行失败 / 服务暂不可用",
+      "key": "Agent 接入协议 / 执行失败 / 服务暂不可用 [1]",
+      "hash": "60273b5260a7c90ca18683f09ab78097d02d034d70966998a7a9240ccd2891c1",
+      "characters": 1455
+    },
+    {
+      "title": "Agent 接入协议 / 用量里的数据",
+      "key": "Agent 接入协议 / 用量里的数据 [1]",
+      "hash": "6a1fa8953fb841fe554dc69bfb9099bce767c0c8f07db3c2432639bed465f61d",
+      "characters": 952
+    },
+    {
+      "title": "Agent 接入协议 / 工具调用的审核",
+      "key": "Agent 接入协议 / 工具调用的审核 [1]",
+      "hash": "685ffa3e74ea13c8a8c294a113848445224abf053d8b6c774d27bca5e63ef0f8",
+      "characters": 884
+    },
+    {
+      "title": "Agent 接入协议 / 压缩上下文",
+      "key": "Agent 接入协议 / 压缩上下文 [1]",
+      "hash": "0dad3a3c087823b29bb67abede3f107d347eea6e869b88dd200ac24c7d8a4e44",
+      "characters": 876
+    },
+    {
+      "title": "Agent 接入协议 / 文字里的时刻",
+      "key": "Agent 接入协议 / 文字里的时刻 [1]",
+      "hash": "bc924c41674a7f200a1711871b61f098c3dcad509629bfaf4a0e4b580b3b8928",
+      "characters": 417
+    },
+    {
+      "title": "Agent 接入协议 / Agent 活动",
+      "key": "Agent 接入协议 / Agent 活动 [1]",
+      "hash": "50a5d45018bd26f6e4f39ae1d15a73050b0541630d84ba04b55e1c3a9bcdc66c",
+      "characters": 258
+    },
+    {
+      "title": "Agent 接入协议 / Agent 活动 / 能力协商",
+      "key": "Agent 接入协议 / Agent 活动 / 能力协商 [1]",
+      "hash": "c230d8e048377b61f7b23bedc7e19f7729b6a8f4fb1d5d7409c0076d1b7d501d",
+      "characters": 430
+    },
+    {
+      "title": "Agent 接入协议 / Agent 活动 / `_coda/wait`",
+      "key": "Agent 接入协议 / Agent 活动 / `_coda/wait` [1]",
+      "hash": "0c2deb5f25f0d5e01acfc41c6828ab730c6bf5746e2628ad247e32349bcf4bcd",
+      "characters": 2701
+    },
+    {
+      "title": "Agent 接入协议 / Agent 活动 / `_coda/wait/stop`",
+      "key": "Agent 接入协议 / Agent 活动 / `_coda/wait/stop` [1]",
+      "hash": "4d357a8f4f8c23f31a7625982ecfcd93e26bd1c421c18a913052ab6576004b57",
+      "characters": 213
+    },
+    {
+      "title": "Agent 接入协议 / Agent 活动 / 规则",
+      "key": "Agent 接入协议 / Agent 活动 / 规则 [1]",
+      "hash": "83489de4bae44c7175998d635ddc096bc17fc9ebc3b40af4a877fae4eba8b386",
+      "characters": 1798
+    },
+    {
+      "title": "Agent 接入协议 / 内置 Agent 的入口进程",
+      "key": "Agent 接入协议 / 内置 Agent 的入口进程 [1]",
+      "hash": "01730b88366ebe5421fe4a0d7e4f064c94aa84d420480b085600554c60f1d4ac",
+      "characters": 3442
+    }
+  ],
+  "identifiers": [
+    {
+      "id": "_coda/session/compact",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / ACP 部分",
+        "Agent 接入协议 / 压缩上下文"
+      ]
+    },
+    {
+      "id": "_coda/wait",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议",
+        "Agent 接入协议 / Agent 活动 / 能力协商",
+        "Agent 接入协议 / Agent 活动 / `_coda/wait`",
+        "Agent 接入协议 / Agent 活动 / `_coda/wait/stop`",
+        "Agent 接入协议 / Agent 活动 / 规则",
+        "Agent 接入协议 / 内置 Agent 的入口进程"
+      ]
+    },
+    {
+      "id": "_coda/wait/stop",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / 压缩上下文",
+        "Agent 接入协议 / Agent 活动 / `_coda/wait`",
+        "Agent 接入协议 / Agent 活动 / `_coda/wait/stop`",
+        "Agent 接入协议 / Agent 活动 / 规则"
+      ]
+    },
+    {
+      "id": "_meta.coda.compact",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / 压缩上下文"
+      ]
+    },
+    {
+      "id": "_meta.coda.default",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / ACP 部分"
+      ]
+    },
+    {
+      "id": "_meta.coda.failure",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议",
+        "Agent 接入协议 / 执行失败",
+        "Agent 接入协议 / 执行失败 / 服务暂不可用"
+      ]
+    },
+    {
+      "id": "_meta.coda.review",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议",
+        "Agent 接入协议 / 工具调用的审核"
+      ]
+    },
+    {
+      "id": "_meta.coda.waits",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / ACP 部分",
+        "Agent 接入协议 / Agent 活动 / 能力协商"
+      ]
+    },
+    {
+      "id": "_meta.steering.supported",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / 插话"
+      ]
+    },
+    {
+      "id": "_session/steering",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议",
+        "Agent 接入协议 / ACP 部分",
+        "Agent 接入协议 / 插话"
+      ]
+    },
+    {
+      "id": "$/cancel_request",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / ACP 部分",
+        "Agent 接入协议 / 内置 Agent 的入口进程"
+      ]
+    },
+    {
+      "id": "agentCapabilities.sessionCapabilities.systemPrompt",
+      "confidence": "中",
+      "rule": "能力或协商字段形状",
+      "sections": [
+        "Agent 接入协议 / 会话指令"
+      ]
+    },
+    {
+      "id": "auth_required",
+      "confidence": "高",
+      "rule": "更新种类、失败分类或配置 format",
+      "sections": [
+        "Agent 接入协议 / ACP 部分",
+        "Agent 接入协议 / 执行失败 / 额度不足"
+      ]
+    },
+    {
+      "id": "clientCapabilities.session.configOptions.boolean",
+      "confidence": "中",
+      "rule": "能力或协商字段形状",
+      "sections": [
+        "Agent 接入协议 / ACP 部分"
+      ]
+    },
+    {
+      "id": "compaction_update",
+      "confidence": "高",
+      "rule": "更新种类、失败分类或配置 format",
+      "sections": [
+        "Agent 接入协议 / 压缩上下文"
+      ]
+    },
+    {
+      "id": "config_option_update",
+      "confidence": "高",
+      "rule": "更新种类、失败分类或配置 format",
+      "sections": [
+        "Agent 接入协议 / ACP 部分"
+      ]
+    },
+    {
+      "id": "contributes.instructions",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / 会话指令"
+      ]
+    },
+    {
+      "id": "elicitation.form",
+      "confidence": "中",
+      "rule": "能力或协商字段形状",
+      "sections": [
+        "Agent 接入协议 / ACP 部分"
+      ]
+    },
+    {
+      "id": "elicitation.url",
+      "confidence": "中",
+      "rule": "能力或协商字段形状",
+      "sections": [
+        "Agent 接入协议 / ACP 部分"
+      ]
+    },
+    {
+      "id": "elicitation/create",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / ACP 部分"
+      ]
+    },
+    {
+      "id": "loadSession",
+      "confidence": "中",
+      "rule": "能力或协商字段形状",
+      "sections": [
+        "Agent 接入协议 / ACP 部分"
+      ]
+    },
+    {
+      "id": "quota_exhausted",
+      "confidence": "高",
+      "rule": "更新种类、失败分类或配置 format",
+      "sections": [
+        "Agent 接入协议 / 执行失败 / 额度不足"
+      ]
+    },
+    {
+      "id": "service_unavailable",
+      "confidence": "高",
+      "rule": "更新种类、失败分类或配置 format",
+      "sections": [
+        "Agent 接入协议 / 执行失败 / 服务暂不可用"
+      ]
+    },
+    {
+      "id": "session_info_update",
+      "confidence": "高",
+      "rule": "更新种类、失败分类或配置 format",
+      "sections": [
+        "Agent 接入协议 / 内置 Agent 的入口进程"
+      ]
+    },
+    {
+      "id": "session.compaction",
+      "confidence": "中",
+      "rule": "能力或协商字段形状",
+      "sections": [
+        "Agent 接入协议 / ACP 部分"
+      ]
+    },
+    {
+      "id": "session.configOptions.boolean",
+      "confidence": "中",
+      "rule": "能力或协商字段形状",
+      "sections": [
+        "Agent 接入协议 / ACP 部分"
+      ]
+    },
+    {
+      "id": "session/cancel",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / ACP 部分",
+        "Agent 接入协议 / Agent 活动 / 规则"
+      ]
+    },
+    {
+      "id": "session/load",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / ACP 部分",
+        "Agent 接入协议 / 会话指令",
+        "Agent 接入协议 / Agent 活动 / 规则"
+      ]
+    },
+    {
+      "id": "session/new",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / ACP 部分",
+        "Agent 接入协议 / 会话指令",
+        "Agent 接入协议 / Agent 活动 / 规则"
+      ]
+    },
+    {
+      "id": "session/prompt",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / ACP 部分",
+        "Agent 接入协议 / 会话指令",
+        "Agent 接入协议 / 插话",
+        "Agent 接入协议 / 执行失败",
+        "Agent 接入协议 / 执行失败 / 服务暂不可用",
+        "Agent 接入协议 / 压缩上下文",
+        "Agent 接入协议 / Agent 活动",
+        "Agent 接入协议 / Agent 活动 / 规则"
+      ]
+    },
+    {
+      "id": "session/request_permission",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / ACP 部分"
+      ]
+    },
+    {
+      "id": "session/set_config_option",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / ACP 部分"
+      ]
+    },
+    {
+      "id": "session/set_mode",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / ACP 部分"
+      ]
+    },
+    {
+      "id": "session/set_model",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / ACP 部分"
+      ]
+    },
+    {
+      "id": "session/update",
+      "confidence": "高",
+      "rule": "明确协议命名空间",
+      "sections": [
+        "Agent 接入协议 / ACP 部分",
+        "Agent 接入协议 / 用量里的数据",
+        "Agent 接入协议 / 工具调用的审核",
+        "Agent 接入协议 / 压缩上下文",
+        "Agent 接入协议 / Agent 活动 / `_coda/wait`",
+        "Agent 接入协议 / 内置 Agent 的入口进程"
+      ]
+    },
+    {
+      "id": "systemPrompt",
+      "confidence": "中",
+      "rule": "能力或协商字段形状",
+      "sections": [
+        "Agent 接入协议",
+        "Agent 接入协议 / ACP 部分",
+        "Agent 接入协议 / 会话指令",
+        "Agent 接入协议 / 内置 Agent 的入口进程"
+      ]
+    },
+    {
+      "id": "tool_call",
+      "confidence": "高",
+      "rule": "更新种类、失败分类或配置 format",
+      "sections": [
+        "Agent 接入协议 / 工具调用的审核"
+      ]
+    },
+    {
+      "id": "tool_call_update",
+      "confidence": "高",
+      "rule": "更新种类、失败分类或配置 format",
+      "sections": [
+        "Agent 接入协议 / 工具调用的审核"
+      ]
+    },
+    {
+      "id": "usage_update",
+      "confidence": "高",
+      "rule": "更新种类、失败分类或配置 format",
+      "sections": [
+        "Agent 接入协议 / 用量里的数据"
+      ]
+    }
+  ],
+  "reviewed": false
+}
