@@ -13,7 +13,9 @@
 
 ## 安装
 
-在「设置 › 插件」的商店里选「Pi」安装（npm 包 `@coda-console/pi`）；也可以在「从仓库添加…」里填 `coda-console/coda-plugins`，选 `plugins/pi`。
+在「设置 › 插件」的商店里选「Pi」安装（npm 包 `@coda-console/pi`，商店里看不到时点「刷新」）；也可以在「从仓库添加…」里填本仓库 `sealiu1997/coda_plugins_pi_agent`。
+
+本插件在本仓库维护，不在 `coda-console/coda-plugins` 里；新版本由维护者手动发布到 npm 的 `@coda-console` 下。
 
 在这台机器上试改请不要用仓库地址，填本机仓库的绝对路径：Coda 只读取已提交的内容，未提交的改动看不到。
 
