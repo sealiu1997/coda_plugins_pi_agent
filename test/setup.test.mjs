@@ -26,6 +26,9 @@ function machine(versions = {}, updateResult = { version: '1.4.0', path: own, in
         if (updateResult instanceof Error) throw updateResult;
         return updateResult;
       },
+      realpath: path => path === own
+        ? join(home, '.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js')
+        : path,
       say: line => said.push(line),
       fail: line => said.push(`! ${line}`)
     }
@@ -106,6 +109,20 @@ test('managed copies below the minimum are replaced with latest, while an explic
   assert.equal(current.updates.length, 1);
 });
 
+test('a custom executable at the managed path is external and never overwritten', () => {
+  const current = machine({ [own]: () => ({ status: 0, stdout: '1.4.0\n' }) });
+  const options = { ...current.options, realpath: path => path };
+  assert.equal(setup({ env: {}, home, ...options, find: () => own, upgradeLatest: true }), 0);
+  assert.equal(current.updates.length, 0);
+  assert.deepEqual(current.said, [`已有 Pi 1.4.0：${own}`]);
+
+  for (const answer of [{ status: 0, stdout: '1.0.9\n' }, { status: 1 }]) {
+    const external = machine({ [own]: () => answer });
+    assert.equal(setup({ env: {}, home, ...external.options, realpath: path => path, find: () => own }), 1);
+    assert.equal(external.updates.length, 0);
+  }
+});
+
 test('an explicit latest request preserves usable external Pi and configured paths', () => {
   const external = machine({ '/external/pi': () => ({ status: 0, stdout: '1.2.0\n' }) });
   assert.equal(setup({ env: {}, home, ...external.options, find: () => '/external/pi', upgradeLatest: true }), 0);
@@ -133,7 +150,9 @@ test('minimum, verified scanner, baseline and Coda runtime panel agree', async (
   assert.equal(manifest.scripts['check:pi:verified'], `node scripts/check-pi-compat.mjs --install ${VERIFIED_PI_VERSION}`);
   assert.equal(manifest.devDependencies['@coda-console/plugin-check'], '0.5.8');
   assert.equal(manifest.contributes.panels[0].actions['update-latest'].command,
-    'node "$CODA_PLUGIN_PATH/agent/pi-runtime-action.mjs"');
+    'exec "$CODA_NODE" "$CODA_PLUGIN_PATH/agent/pi-runtime-action.mjs"');
+  assert.equal(manifest.contributes.panels[0].command,
+    'exec "$CODA_NODE" "$CODA_PLUGIN_PATH/agent/pi-runtime-panel.mjs"');
   assert.equal(manifest.contributes.setup.command, 'exec "$CODA_NODE" "$CODA_PLUGIN_PATH/agent/setup.mjs"');
 });
 

@@ -112,11 +112,11 @@
       {
         "id": "runtime",
         "title": "Pi 运行时",
-        "command": "node \"$CODA_PLUGIN_PATH/agent/pi-runtime-panel.mjs\"",
+        "command": "exec \"$CODA_NODE\" \"$CODA_PLUGIN_PATH/agent/pi-runtime-panel.mjs\"",
         "maxAge": "PT10M",
         "actions": {
           "update-latest": {
-            "command": "node \"$CODA_PLUGIN_PATH/agent/pi-runtime-action.mjs\"",
+            "command": "exec \"$CODA_NODE\" \"$CODA_PLUGIN_PATH/agent/pi-runtime-action.mjs\"",
             "confirm": "把当前 Pi 更新到 npm latest？\n这只会更新插件管理的副本或可识别的 npm 全局安装，不会主动结束正在运行的会话；新版本从之后启动的会话生效。"
           }
         }

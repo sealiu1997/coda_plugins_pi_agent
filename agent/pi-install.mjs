@@ -1,4 +1,5 @@
-// The verified npm graph travels with the plugin; no registry changes can alter normal setup.
+// The verified npm graph travels with the plugin for deterministic compatibility scans. Runtime setup
+// deliberately installs npm latest so the Coda plugin can manage the user's Pi version.
 import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
