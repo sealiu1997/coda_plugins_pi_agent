@@ -1,0 +1,887 @@
+{
+  "schemaVersion": 1,
+  "dependencies": {
+    "commands": [
+      {
+        "name": "abort",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "clear_queue",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "get_available_models",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "get_available_thinking_levels",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "get_commands",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "get_session_stats",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "get_state",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "prompt",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "set_model",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "set_session_name",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "set_thinking_level",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "steer",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      }
+    ],
+    "cli": [
+      {
+        "name": "--mode",
+        "sources": [
+          "agent/entry.mjs",
+          "agent/titles.mjs"
+        ],
+        "takesValue": true
+      },
+      {
+        "name": "--session-id",
+        "sources": [
+          "agent/entry.mjs"
+        ],
+        "takesValue": true
+      },
+      {
+        "name": "--extension",
+        "sources": [
+          "agent/entry.mjs",
+          "agent/titles.mjs",
+          "agent/pi-args.mjs"
+        ],
+        "takesValue": true
+      },
+      {
+        "name": "-e",
+        "sources": [
+          "agent/pi-args.mjs"
+        ],
+        "takesValue": true
+      },
+      {
+        "name": "--append-system-prompt",
+        "sources": [
+          "agent/entry.mjs"
+        ],
+        "takesValue": true
+      },
+      {
+        "name": "--print",
+        "sources": [
+          "agent/titles.mjs"
+        ],
+        "takesValue": false
+      },
+      {
+        "name": "--no-session",
+        "sources": [
+          "agent/titles.mjs"
+        ],
+        "takesValue": false
+      },
+      {
+        "name": "--no-tools",
+        "sources": [
+          "agent/titles.mjs"
+        ],
+        "takesValue": false
+      },
+      {
+        "name": "--no-extensions",
+        "sources": [
+          "agent/titles.mjs"
+        ],
+        "takesValue": false
+      },
+      {
+        "name": "--no-mcp",
+        "sources": [
+          "agent/titles.mjs"
+        ],
+        "takesValue": false
+      },
+      {
+        "name": "--no-skills",
+        "sources": [
+          "agent/titles.mjs"
+        ],
+        "takesValue": false
+      },
+      {
+        "name": "--no-prompt-templates",
+        "sources": [
+          "agent/titles.mjs"
+        ],
+        "takesValue": false
+      },
+      {
+        "name": "--no-themes",
+        "sources": [
+          "agent/titles.mjs"
+        ],
+        "takesValue": false
+      },
+      {
+        "name": "--no-context-files",
+        "sources": [
+          "agent/titles.mjs"
+        ],
+        "takesValue": false
+      },
+      {
+        "name": "--thinking",
+        "sources": [
+          "agent/titles.mjs"
+        ],
+        "takesValue": true
+      },
+      {
+        "name": "--model",
+        "sources": [
+          "agent/titles.mjs"
+        ],
+        "takesValue": true
+      },
+      {
+        "name": "--version",
+        "sources": [
+          "agent/setup.mjs",
+          "agent/pi-command.mjs"
+        ],
+        "takesValue": false
+      }
+    ],
+    "events": [
+      {
+        "name": "compaction_start",
+        "sources": [
+          "agent/entry.mjs",
+          "agent/compaction.mjs"
+        ]
+      },
+      {
+        "name": "compaction_end",
+        "sources": [
+          "agent/entry.mjs",
+          "agent/compaction.mjs"
+        ]
+      },
+      {
+        "name": "summarization_retry_scheduled",
+        "sources": [
+          "agent/entry.mjs",
+          "agent/compaction.mjs"
+        ]
+      },
+      {
+        "name": "summarization_retry_attempt_start",
+        "sources": [
+          "agent/entry.mjs",
+          "agent/compaction.mjs"
+        ]
+      },
+      {
+        "name": "session_info_changed",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "thinking_level_changed",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "message_update",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "tool_execution_start",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "tool_execution_update",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "tool_execution_end",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "auto_retry_end",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "agent_settled",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "agent_end",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      }
+    ],
+    "extensionApi": [
+      {
+        "name": "registerMcpServer",
+        "sources": [
+          "agent/coda-mcp.mjs"
+        ],
+        "signature": "registerMcpServer(name: string, config: McpServerConfig): void"
+      },
+      {
+        "name": "registerProvider",
+        "sources": [
+          "agent/providers.mjs"
+        ],
+        "signature": "registerProvider(name: string, config: ProviderConfig): void"
+      }
+    ],
+    "uiMethods": [
+      {
+        "name": "notify",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "setStatus",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "setWidget",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "set_editor_text",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "setTitle",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "confirm",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "select",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "input",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      },
+      {
+        "name": "editor",
+        "sources": [
+          "agent/entry.mjs"
+        ]
+      }
+    ]
+  },
+  "contracts": [
+    {
+      "scope": "command",
+      "symbol": "set_model",
+      "fields": {
+        "provider": "string",
+        "modelId": "string"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "command",
+      "symbol": "set_thinking_level",
+      "fields": {
+        "level": "string"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "command",
+      "symbol": "prompt",
+      "fields": {
+        "message": "string",
+        "images": "array"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ],
+      "conditional": [
+        "images"
+      ]
+    },
+    {
+      "scope": "command",
+      "symbol": "steer",
+      "fields": {
+        "message": "string",
+        "images": "array"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ],
+      "conditional": [
+        "images"
+      ]
+    },
+    {
+      "scope": "command",
+      "symbol": "set_session_name",
+      "fields": {
+        "name": "string"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "response",
+      "symbol": "get_state",
+      "fields": {
+        "data.model": "any",
+        "data.model.provider": "string",
+        "data.model.id": "string",
+        "data.thinkingLevel": "string",
+        "data.sessionName": "string"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ],
+      "optional": [
+        "data.model",
+        "data.model.provider",
+        "data.model.id",
+        "data.sessionName"
+      ]
+    },
+    {
+      "scope": "response",
+      "symbol": "get_available_models",
+      "fields": {
+        "data.models": "array",
+        "data.models.[].provider": "string",
+        "data.models.[].id": "string",
+        "data.models.[].name": "string"
+      },
+      "sources": [
+        "agent/entry.mjs",
+        "agent/config-options.mjs"
+      ]
+    },
+    {
+      "scope": "response",
+      "symbol": "get_available_thinking_levels",
+      "fields": {
+        "data.levels": "array"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "response",
+      "symbol": "get_commands",
+      "fields": {
+        "data.commands": "array",
+        "data.commands.[].name": "string",
+        "data.commands.[].description": "string"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ],
+      "optional": [
+        "data.commands.[].description"
+      ]
+    },
+    {
+      "scope": "response",
+      "symbol": "prompt",
+      "fields": {
+        "data.disposition": "string"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "response",
+      "symbol": "get_session_stats",
+      "fields": {
+        "data.contextUsage": "any",
+        "data.contextUsage.tokens": "number",
+        "data.contextUsage.contextWindow": "number",
+        "data.contextUsage.percent": "number",
+        "data.tokens.total": "number",
+        "data.cost": "number"
+      },
+      "sources": [
+        "agent/usage.mjs"
+      ],
+      "optional": [
+        "data.contextUsage",
+        "data.contextUsage.tokens",
+        "data.contextUsage.contextWindow",
+        "data.contextUsage.percent"
+      ]
+    },
+    {
+      "scope": "event",
+      "symbol": "agent_settled",
+      "fields": {
+        "aborted": "boolean"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "event",
+      "symbol": "agent_end",
+      "fields": {
+        "willRetry": "boolean",
+        "messages": "array",
+        "messages.[].role": "string",
+        "messages.[].stopReason": "string",
+        "messages.[].errorMessage": "string"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "event",
+      "symbol": "message_update",
+      "fields": {
+        "assistantMessageEvent": "any",
+        "assistantMessageEvent.type": "string",
+        "assistantMessageEvent.delta": "string"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "event",
+      "symbol": "tool_execution_start",
+      "fields": {
+        "toolName": "string",
+        "toolCallId": "string",
+        "args": "any"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "event",
+      "symbol": "tool_execution_update",
+      "fields": {
+        "toolCallId": "string",
+        "partialResult.content": "array"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "event",
+      "symbol": "tool_execution_end",
+      "fields": {
+        "toolCallId": "string",
+        "result.content": "array",
+        "isError": "boolean"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "event",
+      "symbol": "auto_retry_end",
+      "fields": {
+        "success": "boolean",
+        "finalError": "string"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "event",
+      "symbol": "session_info_changed",
+      "fields": {
+        "name": "string"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "event",
+      "symbol": "thinking_level_changed",
+      "fields": {
+        "level": "string"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "event",
+      "symbol": "compaction_start",
+      "fields": {
+        "reason": "string"
+      },
+      "sources": [
+        "agent/compaction.mjs"
+      ]
+    },
+    {
+      "scope": "event",
+      "symbol": "compaction_end",
+      "fields": {
+        "reason": "string",
+        "aborted": "boolean",
+        "willRetry": "boolean",
+        "errorMessage": "string",
+        "result.summary": "string",
+        "result.tokensBefore": "number",
+        "result.estimatedTokensAfter": "number"
+      },
+      "sources": [
+        "agent/compaction.mjs"
+      ]
+    },
+    {
+      "scope": "event",
+      "symbol": "summarization_retry_scheduled",
+      "fields": {
+        "attempt": "number",
+        "maxAttempts": "number",
+        "errorMessage": "string"
+      },
+      "sources": [
+        "agent/compaction.mjs"
+      ]
+    },
+    {
+      "scope": "event",
+      "symbol": "summarization_retry_attempt_start",
+      "fields": {
+        "source": "string"
+      },
+      "sources": [
+        "agent/compaction.mjs"
+      ]
+    },
+    {
+      "scope": "ui",
+      "symbol": "confirm",
+      "fields": {
+        "type": "string",
+        "method": "string",
+        "id": "string",
+        "title": "string",
+        "message": "string",
+        "timeout": "number"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "ui",
+      "symbol": "select",
+      "fields": {
+        "type": "string",
+        "method": "string",
+        "id": "string",
+        "title": "string",
+        "options": "array",
+        "timeout": "number"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "ui",
+      "symbol": "input",
+      "fields": {
+        "type": "string",
+        "method": "string",
+        "id": "string",
+        "title": "string",
+        "placeholder": "string",
+        "timeout": "number"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "ui",
+      "symbol": "editor",
+      "fields": {
+        "type": "string",
+        "method": "string",
+        "id": "string",
+        "title": "string",
+        "prefill": "string"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "type",
+      "symbol": "RpcResponse",
+      "fields": {
+        "id": "string",
+        "type": "string",
+        "success": "boolean",
+        "error": "string",
+        "data": "any"
+      },
+      "sources": [
+        "agent/pi-rpc.mjs"
+      ]
+    },
+    {
+      "scope": "type",
+      "symbol": "RpcExtensionUIResponse",
+      "fields": {
+        "id": "string",
+        "value": "string",
+        "confirmed": "boolean",
+        "cancelled": "boolean"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "type",
+      "symbol": "ProviderConfig",
+      "fields": {
+        "name": "string",
+        "baseUrl": "string",
+        "apiKey": "string",
+        "api": "string",
+        "models": "array",
+        "models.[].id": "string",
+        "models.[].name": "string",
+        "models.[].reasoning": "boolean",
+        "models.[].input": "array",
+        "models.[].cost.input": "number",
+        "models.[].cost.output": "number",
+        "models.[].cost.cacheRead": "number",
+        "models.[].cost.cacheWrite": "number",
+        "models.[].contextWindow": "number",
+        "models.[].maxTokens": "number"
+      },
+      "sources": [
+        "agent/providers.mjs"
+      ],
+      "inputObject": true
+    },
+    {
+      "scope": "type",
+      "symbol": "McpServerConfig",
+      "fields": {
+        "url": "string",
+        "headers": "any",
+        "command": "string",
+        "args": "array",
+        "env": "any",
+        "cwd": "string",
+        "exposure": "string"
+      },
+      "sources": [
+        "agent/coda-mcp.mjs"
+      ],
+      "inputObject": true
+    },
+    {
+      "scope": "type",
+      "symbol": "ImageContent",
+      "fields": {
+        "type": "string",
+        "data": "string",
+        "mimeType": "string"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "type",
+      "symbol": "TextContent",
+      "fields": {
+        "type": "string",
+        "text": "string"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "scope": "type",
+      "symbol": "AssistantMessageEvent",
+      "fields": {
+        "type": "string",
+        "delta": "string"
+      },
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    }
+  ],
+  "configuration": [
+    {
+      "name": "PI_CODING_AGENT_DIR",
+      "sources": [
+        "agent/entry.mjs"
+      ],
+      "meaning": "Pi owns settings, authentication and session storage; default ~/.pi/agent. Plugin forwards environment, does not read Pi settings keys."
+    },
+    {
+      "name": "settings.json",
+      "sources": [
+        "package.json"
+      ],
+      "keys": [],
+      "meaning": "Coda configFiles exposes this file; agent does not parse it."
+    },
+    {
+      "name": "models.json",
+      "sources": [
+        "package.json"
+      ],
+      "keys": [],
+      "meaning": "Coda configFiles exposes this file; agent does not parse it."
+    }
+  ],
+  "notes": [
+    "pi.commandPath / pi.extraArgs / pi.providers are Coda settings, not Pi settings. Arbitrary pi.extraArgs and user extensions are outside this fixed dependency inventory.",
+    "Extension signatures are compared across snapshots. Declaration field checks verify consumed paths and coarse JSON types, not all TypeScript assignability.",
+    "Tool names and args are heuristics with generic fallbacks. Text/image content uses type, text, data and mimeType. Error classifiers depend on provider wording and remain heuristic."
+  ],
+  "values": [
+    {
+      "symbol": "PromptDisposition",
+      "values": [
+        "handled",
+        "started",
+        "queued"
+      ],
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "symbol": "AssistantMessageEvent",
+      "values": [
+        "text_delta",
+        "thinking_delta"
+      ],
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    },
+    {
+      "symbol": "StopReason",
+      "values": [
+        "length",
+        "error",
+        "aborted"
+      ],
+      "sources": [
+        "agent/entry.mjs"
+      ]
+    }
+  ]
+}
