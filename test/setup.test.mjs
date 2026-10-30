@@ -117,6 +117,38 @@ test('an existing supported Pi is taken over without invoking npm', () => {
   assert.deepEqual(m.said, ['已有 Pi 1.4.0 可用：/usr/local/bin/pi']);
 });
 
+test('setup cleans a stale committed backup even when follow-latest is off', async t => {
+  const runtimeHome = await mkdtemp(join(tmpdir(), 'pi-setup-recovery-'));
+  t.after(() => rm(runtimeHome, { recursive: true, force: true }));
+  const prefix = join(runtimeHome, '.local');
+  const runtimeCommand = managedPi({}, runtimeHome);
+  const runtimeActual = join(prefix, `lib/node_modules/${PACKAGE}/dist/bundle/cli.js`);
+  const backup = join(prefix, '.coda-pi-backup-stale');
+  const lock = join(prefix, '.coda-pi-update.lock');
+  await mkdir(backup, { recursive: true });
+  await mkdir(lock, { recursive: true });
+  await writeFile(join(backup, 'transaction.json'), JSON.stringify({
+    schemaVersion: 1,
+    phase: 'committed',
+    states: [],
+  }));
+  await writeFile(join(lock, 'owner.json'), JSON.stringify({ pid: 999_999_999 }));
+  const m = machine({
+    versions: { [runtimeCommand]: () => ({ status: 0, stdout: '1.4.0\n' }) },
+    realpath: path => path === runtimeCommand ? runtimeActual : path,
+  });
+
+  assert.equal(setup({
+    env: {},
+    home: runtimeHome,
+    ...m.options,
+    find: () => runtimeCommand,
+  }), 0);
+  await assert.rejects(stat(backup), error => error.code === 'ENOENT');
+  await assert.rejects(stat(lock), error => error.code === 'ENOENT');
+  assert.deepEqual(m.said, [`已有 Pi 1.4.0 可用：${runtimeCommand}`]);
+});
+
 test('a missing Pi installs npm latest into ~/.local/bin', () => {
   const m = machine();
   assert.equal(setup({ env: {}, home, ...m.options, find: () => 'pi' }), 0);

@@ -6,10 +6,16 @@ import {
   MIN_PI_VERSION,
   findPi,
   managedPi,
+  managedPrefix,
   supportedVersion,
   versionOf,
 } from './pi-command.mjs';
-import { runtimeOwner, updateLatest } from './pi-runtime.mjs';
+import {
+  recoverIdleInstallation,
+  recoverPendingInstallation,
+  runtimeOwner,
+  updateLatest,
+} from './pi-runtime.mjs';
 
 export { versionOf };
 
@@ -41,9 +47,29 @@ export function setup({
     : '';
   const explicitlyConfigured = configured && configured !== 'pi';
   const followLatest = settings['pi.updateLatest'] === true;
-  const launch = find(settings, { env, home });
+  try {
+    recoverPendingInstallation({ env });
+  } catch (error) {
+    fail(`恢复上次未完成的 Pi 更新失败：${error.message}`);
+    return 1;
+  }
+  let launch = find(settings, { env, home });
+  let owner = runtimeOwner(launch === 'pi' ? null : launch, { env, home, realpath });
+  const recoveryPrefix = owner.kind === 'npm'
+    ? owner.prefix
+    : owner.kind === 'none' || owner.kind === 'managed' ? managedPrefix(env, home) : null;
+  if (recoveryPrefix) {
+    try {
+      if (recoverIdleInstallation(recoveryPrefix, { env })) {
+        launch = find(settings, { env, home });
+        owner = runtimeOwner(launch === 'pi' ? null : launch, { env, home, realpath });
+      }
+    } catch (error) {
+      fail(`恢复上次未完成的 Pi 更新失败：${error.message}`);
+      return 1;
+    }
+  }
   const version = launch === 'pi' ? null : versionOf(launch, { env, node, run });
-  const owner = runtimeOwner(launch === 'pi' ? null : launch, { env, home, realpath });
   const installable = owner.kind === 'none' || owner.kind === 'managed' || owner.kind === 'npm';
 
   const install = ({ updateRequested }) => {

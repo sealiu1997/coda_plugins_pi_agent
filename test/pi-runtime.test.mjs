@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -13,7 +14,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, normalize } from 'node:path';
 import { managedPi, managedPrefix, PACKAGE, versionOf } from '../agent/pi-command.mjs';
 import {
   compareVersions,
@@ -21,7 +22,9 @@ import {
   latestVersion,
   npmCli,
   npmOwner,
+  recoverIdleInstallation,
   recoverInterruptedInstallation,
+  recoverPendingInstallation,
   runtimeOwner,
   updateLatest,
   wrapperTarget,
@@ -459,6 +462,48 @@ test('a committed backup is cleaned on recovery without rolling back the new ins
   assert.equal(existsSync(backupRoot), false);
 });
 
+test('an empty backup interrupted before its first manifest rename is removed', t => {
+  const fixture = packageFixture(t);
+  const backupRoot = mkdtempSync(join(fixture.prefix, backupName));
+  writeFileSync(join(backupRoot, 'transaction.json.999.tmp'), '{"schemaVersion":1}');
+
+  assert.equal(recoverInterruptedInstallation(fixture.prefix), true);
+  assert.equal(existsSync(backupRoot), false);
+});
+
+test('a recorded external npm prefix is recovered after its command was moved away', t => {
+  const fixture = packageFixture(t);
+  const stateDir = join(fixture.root, 'state');
+  const transactionDir = join(stateDir, 'pi-runtime-transactions');
+  const backupRoot = mkdtempSync(join(fixture.prefix, backupName));
+  renameSync(fixture.packageDir, join(backupRoot, 'package'));
+  renameSync(fixture.command, join(backupRoot, 'command'));
+  const transaction = fixture.transaction({
+    package: { moved: true },
+    command: { moved: true },
+  });
+  writeFileSync(join(backupRoot, 'transaction.json'), JSON.stringify(transaction));
+  const lock = join(fixture.prefix, '.coda-pi-update.lock');
+  mkdirSync(lock);
+  writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 999_999_999 }));
+  mkdirSync(transactionDir, { recursive: true });
+  const key = createHash('sha256').update(normalize(fixture.prefix)).digest('hex');
+  const record = join(transactionDir, `${key}.json`);
+  writeFileSync(record, JSON.stringify({
+    schemaVersion: 1,
+    prefix: fixture.prefix,
+    backupRoot,
+  }));
+  const env = { CODA_PLUGIN_STATE: stateDir };
+
+  assert.equal(recoverPendingInstallation({ env }), true);
+  assert.equal(readFileSync(fixture.cli, 'utf8'), '1.2.0\n');
+  assert.equal(readlinkSync(fixture.command), fixture.commandTarget);
+  assert.equal(existsSync(backupRoot), false);
+  assert.equal(existsSync(lock), false);
+  assert.equal(existsSync(record), false);
+});
+
 test('a failed recovery retains the backup and a blocking update lock', t => {
   const root = mkdtempSync(join(tmpdir(), 'pi-recovery-failure-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -513,6 +558,30 @@ test('an active update lock prevents a concurrent npm install', t => {
     realpath: fixture.realpath,
   }), /另一个 Pi 更新正在进行/);
   assert.equal(m.ran.some(args => args[2] === 'install'), false);
+});
+
+test('setup recovery removes a stale lock even when no backup remains', t => {
+  const fixture = packageFixture(t);
+  const lock = join(fixture.prefix, '.coda-pi-update.lock');
+  mkdirSync(lock);
+  writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 999_999_999 }));
+
+  assert.equal(recoverIdleInstallation(fixture.prefix), true);
+  assert.equal(existsSync(lock), false);
+});
+
+test('setup recovery leaves an active update lock and its owner intact', t => {
+  const fixture = packageFixture(t);
+  const lock = join(fixture.prefix, '.coda-pi-update.lock');
+  const owner = JSON.stringify({ pid: process.pid, token: 'active-update' });
+  mkdirSync(lock);
+  writeFileSync(join(lock, 'owner.json'), owner);
+
+  assert.throws(
+    () => recoverIdleInstallation(fixture.prefix),
+    /另一个 Pi 更新正在进行/,
+  );
+  assert.equal(readFileSync(join(lock, 'owner.json'), 'utf8'), owner);
 });
 
 test('updateLatest upgrades the npm installation behind a recognized shell wrapper', t => {

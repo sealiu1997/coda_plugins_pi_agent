@@ -1,14 +1,19 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
+  closeSync,
   existsSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   realpathSync,
   renameSync,
   rmSync,
+  rmdirSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
@@ -209,6 +214,9 @@ const packageInstallationPaths = prefix => ({
 });
 const updateLock = prefix => join(prefix, '.coda-pi-update.lock');
 const backupPrefix = '.coda-pi-backup-';
+const transactionStateDir = env => env.CODA_PLUGIN_STATE
+  ? join(env.CODA_PLUGIN_STATE, 'pi-runtime-transactions')
+  : null;
 
 const pathExists = path => {
   try {
@@ -220,10 +228,67 @@ const pathExists = path => {
   }
 };
 
-const writeTransaction = (backupRoot, transaction) => writeFileSync(
-  join(backupRoot, 'transaction.json'),
-  `${JSON.stringify(transaction, null, 2)}\n`,
-);
+const writeFileAtomic = (target, contents) => {
+  const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+  const descriptor = openSync(temporary, 'w', 0o600);
+  try {
+    writeFileSync(descriptor, contents);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  renameSync(temporary, target);
+};
+
+const writeTransaction = (backupRoot, transaction) => {
+  writeFileAtomic(
+    join(backupRoot, 'transaction.json'),
+    `${JSON.stringify(transaction, null, 2)}\n`,
+  );
+};
+
+const transactionRecord = (env, prefix) => {
+  const root = transactionStateDir(env);
+  if (!root) return null;
+  const key = createHash('sha256').update(normalize(prefix)).digest('hex');
+  return join(root, `${key}.json`);
+};
+
+const rememberTransaction = (env, prefix, backupRoot) => {
+  const record = transactionRecord(env, prefix);
+  if (!record) return;
+  mkdirSync(dirname(record), { recursive: true });
+  writeFileAtomic(record, `${JSON.stringify({
+    schemaVersion: 1,
+    prefix: normalize(prefix),
+    backupRoot,
+  }, null, 2)}\n`);
+};
+
+const forgetTransaction = (env, prefix) => {
+  const record = transactionRecord(env, prefix);
+  if (record) rmSync(record, { force: true });
+};
+
+const recordedTransactionPrefixes = env => {
+  const root = transactionStateDir(env);
+  if (!root || !pathExists(root)) return [];
+  const prefixes = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const record = join(root, entry.name);
+    try {
+      const value = JSON.parse(readFileSync(record, 'utf8'));
+      if (value?.schemaVersion !== 1 || typeof value.prefix !== 'string' || !value.prefix) {
+        throw new Error('事务记录格式不支持');
+      }
+      prefixes.push(normalize(value.prefix));
+    } catch (error) {
+      throw new Error(`无法读取 Pi 更新事务记录 ${record}：${error.message}`);
+    }
+  }
+  return [...new Set(prefixes)];
+};
 
 const readTransaction = backupRoot => {
   const manifest = join(backupRoot, 'transaction.json');
@@ -247,6 +312,19 @@ const processIsAlive = pid => {
     return error.code === 'EPERM';
   }
 };
+
+function cleanupFinishedBackup(backupRoot) {
+  const entries = readdirSync(backupRoot);
+  entries.sort((left, right) => {
+    if (left === 'transaction.json') return 1;
+    if (right === 'transaction.json') return -1;
+    return left.localeCompare(right);
+  });
+  for (const entry of entries) {
+    rmSync(join(backupRoot, entry), { recursive: true, force: true });
+  }
+  rmdirSync(backupRoot);
+}
 
 function restoreTransaction(backupRoot, transaction) {
   let firstError = null;
@@ -277,28 +355,42 @@ function restoreTransaction(backupRoot, transaction) {
   if (firstError) throw firstError;
 }
 
-export function recoverInterruptedInstallation(prefix) {
+function interruptedBackups(prefix) {
   if (!pathExists(prefix)) return false;
   const backups = readdirSync(prefix, { withFileTypes: true })
     .filter(entry => entry.isDirectory() && entry.name.startsWith(backupPrefix))
     .map(entry => join(prefix, entry.name))
     .sort();
-  if (!backups.length) return false;
+  return backups;
+}
+
+export function recoverInterruptedInstallation(prefix) {
+  const backups = interruptedBackups(prefix);
+  if (!backups?.length) return false;
   if (backups.length > 1) {
     throw new Error(`检测到多个未完成的 Pi 更新备份，请人工检查：${backups.join(', ')}`);
   }
   const backupRoot = backups[0];
+  if (!pathExists(join(backupRoot, 'transaction.json'))) {
+    const payloads = readdirSync(backupRoot)
+      .filter(name => !name.startsWith('transaction.json.'));
+    if (payloads.length) {
+      throw new Error(`Pi 更新备份缺少事务清单：${backupRoot}`);
+    }
+    cleanupFinishedBackup(backupRoot);
+    return true;
+  }
   const transaction = readTransaction(backupRoot);
   if (transaction.phase !== 'committed') {
     transaction.phase = 'rollback';
     writeTransaction(backupRoot, transaction);
     restoreTransaction(backupRoot, transaction);
   }
-  rmSync(backupRoot, { recursive: true, force: true });
+  cleanupFinishedBackup(backupRoot);
   return true;
 }
 
-function acquireUpdateLock(prefix) {
+function acquireUpdateLock(prefix, { env = process.env } = {}) {
   mkdirSync(prefix, { recursive: true });
   const lock = updateLock(prefix);
   const owner = {
@@ -310,32 +402,47 @@ function acquireUpdateLock(prefix) {
     mkdirSync(lock);
     writeFileSync(join(lock, 'owner.json'), JSON.stringify(owner));
   };
-  try {
-    createLock();
-  } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-    let existing = null;
+  const staleLocks = [];
+  let acquired = false;
+  for (let attempt = 0; attempt < 3 && !acquired; attempt++) {
     try {
-      existing = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'));
-    } catch {}
-    if (processIsAlive(existing?.pid)) {
-      throw new Error(`另一个 Pi 更新正在进行（PID ${existing.pid}）：${lock}`);
-    }
-    // Avoid taking a lock another process has created but has not populated yet.
-    if (!existing) {
+      createLock();
+      acquired = true;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      let existing = null;
       try {
-        if (Date.now() - lstatSync(lock).mtimeMs < 10_000) {
-          throw new Error(`另一个 Pi 更新正在初始化：${lock}`);
+        existing = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'));
+      } catch {}
+      if (processIsAlive(existing?.pid)) {
+        throw new Error(`另一个 Pi 更新正在进行（PID ${existing.pid}）：${lock}`);
+      }
+      // Avoid taking a lock another process has created but has not populated yet.
+      if (!existing) {
+        try {
+          if (Date.now() - lstatSync(lock).mtimeMs < 10_000) {
+            throw new Error(`另一个 Pi 更新正在初始化：${lock}`);
+          }
+        } catch (statError) {
+          if (statError.message.startsWith('另一个 Pi 更新')) throw statError;
         }
-      } catch (statError) {
-        if (statError.message.startsWith('另一个 Pi 更新')) throw statError;
+      }
+      const stale = `${lock}.stale-${owner.pid}-${owner.token}-${attempt}`;
+      try {
+        renameSync(lock, stale);
+        staleLocks.push(stale);
+      } catch (renameError) {
+        if (renameError.code !== 'ENOENT') throw renameError;
       }
     }
-    rmSync(lock, { recursive: true, force: true });
-    createLock();
+  }
+  if (!acquired) throw new Error(`无法取得 Pi 更新锁：${lock}`);
+  for (const stale of staleLocks) {
+    try { rmSync(stale, { recursive: true, force: true }); } catch {}
   }
   try {
     recoverInterruptedInstallation(prefix);
+    forgetTransaction(env, prefix);
   } catch (recoveryError) {
     // Keep both the backup and lock. A failed restore must be inspectable and must block a new
     // npm install from overwriting the remaining recovery evidence.
@@ -350,11 +457,32 @@ function acquireUpdateLock(prefix) {
   };
 }
 
+// Setup uses this to clean an interrupted transaction without creating lock files on every
+// ordinary launch. If another process is still updating, its live pid lock is reported instead.
+export function recoverIdleInstallation(prefix, { env = process.env } = {}) {
+  const hasBackups = (interruptedBackups(prefix)?.length ?? 0) > 0;
+  if (!hasBackups && !pathExists(updateLock(prefix))) {
+    forgetTransaction(env, prefix);
+    return false;
+  }
+  const releaseLock = acquireUpdateLock(prefix, { env });
+  releaseLock();
+  return true;
+}
+
+export function recoverPendingInstallation({ env = process.env } = {}) {
+  let recovered = false;
+  for (const prefix of recordedTransactionPrefixes(env)) {
+    recovered = recoverIdleInstallation(prefix, { env }) || recovered;
+  }
+  return recovered;
+}
+
 // npm can return non-zero after changing a global prefix, and a syntactically successful install
 // can still leave an unusable entrypoint. Keep the previous package, command and npm lockfile in
 // the same filesystem and restore them when installation or verification fails.
-function backupInstallation(prefix) {
-  const releaseLock = acquireUpdateLock(prefix);
+function backupInstallation(prefix, { env = process.env } = {}) {
+  const releaseLock = acquireUpdateLock(prefix, { env });
   let backupRoot;
   let transaction;
   try {
@@ -383,12 +511,14 @@ function backupInstallation(prefix) {
     } catch (error) {
       throw new Error(`${error.message}；未完成备份保留在 ${backupRoot}`);
     }
-    rmSync(backupRoot, { recursive: true, force: true });
+    cleanupFinishedBackup(backupRoot);
+    forgetTransaction(env, prefix);
     releaseLock();
   };
 
   try {
     writeTransaction(backupRoot, transaction);
+    rememberTransaction(env, prefix, backupRoot);
     for (const state of transaction.states) {
       if (!state.existed) continue;
       renameSync(state.path, join(backupRoot, state.name));
@@ -412,7 +542,8 @@ function backupInstallation(prefix) {
       transaction.phase = 'committed';
       writeTransaction(backupRoot, transaction);
       try {
-        rmSync(backupRoot, { recursive: true, force: true });
+        cleanupFinishedBackup(backupRoot);
+        forgetTransaction(env, prefix);
       } catch {
         // The new installation has already run and passed verification. Keep the committed
         // backup for the next setup run to clean instead of turning success into a rollback.
@@ -453,7 +584,7 @@ export function updateLatest({
   const verificationPath = before.owner.kind === 'none' || before.owner.kind === 'managed'
     ? managedPi(env, home)
     : before.path;
-  const installation = backup(prefix);
+  const installation = backup(prefix, { env });
   let version;
   try {
     const result = run(node, [
