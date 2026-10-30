@@ -7,7 +7,14 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ProcessScope, minimalEnv } from '../scripts/process-scope.mjs';
 const temporary=t=>{const dir=mkdtempSync(join(tmpdir(),'pi-process-test-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));return dir;};
-async function until(fn) { for(let i=0;i<300;i++){if(fn())return;await delay(10);}throw new Error('fixture not ready'); }
+async function until(fn, description) {
+  const timeout = 10_000, deadline = performance.now() + timeout;
+  while (!fn()) {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw new Error(`等待超时（${timeout}ms）：${description}`);
+    await delay(Math.min(25, remaining));
+  }
+}
 const alive=pid=>{try{process.kill(pid,0);return true;}catch{return false;}};
 
 test('timed-out command reaps a TERM-resistant descendant in its process group', async t => {
@@ -16,7 +23,7 @@ test('timed-out command reaps a TERM-resistant descendant in its process group',
   await assert.rejects(scope.run(process.execPath,['-e',script],{env:minimalEnv(dir),timeout:400}),/超时/);
   assert.ok(existsSync(term), 'TERM grace precedes KILL');
   const descendant=Number(readFileSync(pid));
-  await until(()=>!alive(descendant));
+  await until(()=>!alive(descendant), `Pi 后代进程 ${descendant} 退出`);
   await scope.cleanup();
 });
 
@@ -27,7 +34,7 @@ for (const signal of ['SIGINT','SIGTERM']) test(`scanner ${signal} cleans up its
   t.after(()=>{if(child.exitCode===null)child.kill('SIGKILL');});
   let stdout='';child.stdout.on('data',chunk=>{stdout+=chunk;});child.stderr.resume();
   const exited=new Promise(resolve=>child.once('close',resolve));
-  await until(()=>existsSync(info)); const recorded=JSON.parse(readFileSync(info));
+  await until(()=>existsSync(info), `scanner ${signal} 的 Pi --version 就绪信息写入 ${info}`); const recorded=JSON.parse(readFileSync(info));
   child.kill(signal);assert.equal(await exited,3);
   assert.match(JSON.parse(stdout).error,/中断/);
   assert.equal(existsSync(recorded.home),false); assert.equal(alive(recorded.pid),false);
