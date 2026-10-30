@@ -101,6 +101,19 @@ test("piVersion finds node through the injected PATH for an absolute Pi command"
   }
 });
 
+test("piVersion retries after a transient version-check failure", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-version-retry-"));
+  try {
+    const pi = join(dir, "pi");
+    await writeFile(pi, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    assert.equal(await piVersion(pi), null);
+    await writeFile(pi, "#!/bin/sh\necho 1.4.0\n", { mode: 0o755 });
+    assert.equal(await piVersion(pi), "1.4.0");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("the plugin version fallback ends at 'unknown' when package.json cannot be read", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-version-"));
   try {

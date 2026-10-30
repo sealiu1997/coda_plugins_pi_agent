@@ -170,10 +170,13 @@ export async function piVersion(piCommand, {
         timeout,
         env: envForPiCommand(env, launch, node),
       });
-      versionCache.set(key, parsePiVersion(`${stdout ?? ''}\n${stderr ?? ''}`));
+      const version = parsePiVersion(`${stdout ?? ''}\n${stderr ?? ''}`);
+      // A failed or unparseable probe must not permanently poison this Agent process. Only
+      // cache successful observations so the next call can recover after PATH or permissions
+      // are repaired.
+      if (version) versionCache.set(key, version);
     } catch (error) {
       process.stderr.write(`[pi-agent] Pi --version failed: ${error.message}\n`);
-      versionCache.set(key, null);
     }
   }
   return versionCache.get(key) ?? (fallback ? await fallback() : null);

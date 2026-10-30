@@ -6,7 +6,7 @@
 
 - 插件优先接管这台机器已有的 Pi：先看 `pi.commandPath`，再看 PATH，以及 npm、Homebrew、Bun、Volta、pnpm、nvm、fnm、asdf 等常见安装位置。
 - 没找到可运行的 Pi 时，安装流程用 Coda 自带的 Node/npm 把 `@earendil-works/pi-coding-agent@latest` 装到用户预期的 `~/.local` npm prefix，入口是 `~/.local/bin/pi`。
-- 最低支持 Pi **1.1.0**；开发兼容检查固定使用 **1.4.0**。设置里的「Pi 跟随最新版」打开并保存后，会通过准备运行环境把可识别的 npm 或插件管理的安装更新到 npm latest。
+- 运行时最低版本门槛是 Pi **1.1.0**；普通 CI 固定验证 **1.4.0**。隔离扫描 1.1.0 目前没有确定不兼容项，但仍有 4 项声明差异需要人工判断，因此不把 1.1.0 写成已由自动化完整验证。设置里的「Pi 跟随最新版」打开并保存后，会通过准备运行环境把可识别的 npm 或插件管理的安装更新到 npm latest。
 - 非 npm 的自定义安装会被接管和验证，但不会被静默覆盖。需要由插件自动更新时，应使用 PATH 上的 npm 全局安装，或用 `pi.commandPath` 明确指向一个可识别的 npm 安装。
 - 还要在 Coda 里添加 provider（见下），或在 pi 里完成登录。
 - Node 由 Coda 提供（`$CODA_NODE`）。Pi 是独立的本机安装；Pi 1.4.0 和 Coda 官方检查器只作为开发、CI 与兼容扫描的 devDependency。
@@ -107,6 +107,8 @@ node scripts/check-pi-compat.mjs --accept
 - 没有 Pi：安装 npm latest 到 `~/.local`。
 - 自动发现的 npm 全局 Pi 低于最低版本：在它原来的 npm prefix 中升级。
 - 「Pi 跟随最新版」打开：保存设置后把可识别的 npm 安装升级到 latest；关闭后停止跟随。
+- npm registry 暂时不可达或更新失败时，已有且达到最低版本的 Pi 会继续可用；缺少可用 Pi 时准备环境才失败。
+- 原位更新前会保留旧 package、命令入口与 npm lockfile；安装结果无法运行或仍低于目标版本时恢复旧安装。
 - 自定义脚本、独立下载或无法识别安装来源的 Pi：可以接管，但不会覆盖；要自动更新时请改用 npm 安装并重新保存设置。
 
 Coda 官方 Claude SDK 和 Codex 插件把各自的 SDK/CLI 锁在插件依赖里，更新时在插件页检查和更新整个插件。Pi 插件按你的要求改成管理机器上的 Pi；Pi 插件本体的版本仍由 Coda 插件商店的「检查更新 / 更新」机制管理。更新 Pi 不会主动结束正在运行的会话，新启动的 Pi 进程使用更新后的版本。

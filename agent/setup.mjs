@@ -70,6 +70,10 @@ export function setup({
       }
       return 0;
     } catch (error) {
+      if (version && supportedVersion(version)) {
+        say(`更新 Pi 失败，继续使用已有的 Pi ${version}（${launch}）：${error.message}`);
+        return 0;
+      }
       fail(`${owner.kind === 'none' ? '安装' : '更新'} Pi 失败：${error.message}`);
       return 1;
     }
@@ -86,7 +90,9 @@ export function setup({
   }
 
   if (!supportedVersion(version)) {
-    if (!explicitlyConfigured && installable) return install({ updateRequested: false });
+    if (installable && (!explicitlyConfigured || followLatest)) {
+      return install({ updateRequested: followLatest });
+    }
     fail(`Pi ${version}（${launch}）低于最低版本 ${MIN_PI_VERSION}。请用原来的安装工具升级，或在插件设置中打开「Pi 跟随最新版」并保存。`);
     return 1;
   }

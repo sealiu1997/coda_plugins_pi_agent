@@ -1,5 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { managedPi, managedPrefix, PACKAGE, versionOf } from '../agent/pi-command.mjs';
 import {
@@ -19,6 +30,7 @@ const npm = '/coda/node/lib/node_modules/npm/bin/npm-cli.js';
 const own = managedPi({}, home);
 const managedActual = join(home, '.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js');
 const managedRealpath = path => path === own ? managedActual : path;
+const noBackup = () => ({ restore() {}, commit() {} });
 
 function runFor({
   commandVersions = {},
@@ -213,13 +225,14 @@ test('updateLatest installs into ~/.local for a missing Pi', () => {
     },
     find: () => present ? own : 'pi',
     realpath: managedRealpath,
+    backup: noBackup,
   });
   assert.equal(result.version, '1.4.0');
   assert.equal(result.installed, true);
   const install = m.ran.find(args => args[0] === node && args[2] === 'install');
   assert.deepEqual(install, [
     node, npm, 'install', '--global', '--prefix', managedPrefix({}, home), '--ignore-scripts',
-    '--no-fund', '--no-audit', '--no-update-notifier', `${PACKAGE}@latest`,
+    '--no-fund', '--no-audit', '--no-update-notifier', `${PACKAGE}@1.4.0`,
   ]);
 });
 
@@ -233,6 +246,7 @@ test('updateLatest updates a recognized npm global install in its own prefix', (
     run: m.run,
     find: () => external,
     realpath: () => '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
+    backup: noBackup,
   });
   assert.equal(result.version, '1.4.0');
   const install = m.ran.find(args => args[0] === node && args[2] === 'install');
@@ -249,6 +263,7 @@ test('updateLatest skips npm when the installed Pi is already latest', () => {
     run: m.run,
     find: () => external,
     realpath: () => '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
+    backup: noBackup,
   });
   assert.equal(result.version, '1.4.0');
   assert.equal(result.latest, '1.4.0');
@@ -260,11 +275,57 @@ test('updateLatest refuses custom installers and reports npm failures', () => {
   const custom = runFor({ commandVersions: { '/custom/pi': () => ({ status: 0, stdout: '1.4.0' }) } });
   assert.throws(() => updateLatest({
     env: {}, home, node, run: custom.run, find: () => '/custom/pi', realpath: () => '/custom/pi',
+    backup: noBackup,
   }), /无法自动升级/);
   assert.equal(custom.ran.some(args => args[2] === 'install'), false);
 
   const failed = runFor({ installStatus: 1, installedVersion: '1.2.0' });
   assert.throws(() => updateLatest({
     env: {}, home, node, run: failed.run, find: () => own, realpath: managedRealpath,
+    backup: noBackup,
   }), /npm failed/);
+});
+
+test('a failed verification restores the previous npm installation', t => {
+  const root = mkdtempSync(join(tmpdir(), 'pi-rollback-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const prefix = join(root, 'prefix');
+  const packageDir = join(prefix, 'lib/node_modules/@earendil-works/pi-coding-agent');
+  const cli = join(packageDir, 'dist/bundle/cli.js');
+  const command = join(prefix, 'bin/pi');
+  const commandTarget = '../lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js';
+  mkdirSync(join(packageDir, 'dist/bundle'), { recursive: true });
+  mkdirSync(join(prefix, 'bin'), { recursive: true });
+  writeFileSync(cli, "console.log('1.2.0');\n");
+  symlinkSync(commandTarget, command);
+
+  let installing = false;
+  const run = (_command, args) => {
+    if (args[0] === npm && args[1] === 'view') return { status: 0, stdout: JSON.stringify('1.4.0') };
+    if (args[0] === npm && args[1] === 'install') {
+      installing = true;
+      mkdirSync(join(packageDir, 'dist/bundle'), { recursive: true });
+      mkdirSync(join(prefix, 'bin'), { recursive: true });
+      writeFileSync(cli, 'broken');
+      symlinkSync(commandTarget, command);
+      return { status: 0 };
+    }
+    if (args.includes('--version')) {
+      return installing
+        ? { status: 1, stderr: 'broken install' }
+        : { status: 0, stdout: '1.2.0' };
+    }
+    return { status: 1 };
+  };
+
+  assert.throws(() => updateLatest({
+    env: {},
+    home,
+    node,
+    run,
+    find: () => command,
+  }), /无法运行/);
+  assert.equal(readFileSync(cli, 'utf8'), "console.log('1.2.0');\n");
+  assert.equal(readlinkSync(command), commandTarget);
+  assert.equal(existsSync(join(prefix, 'lib/node_modules/.package-lock.json')), false);
 });

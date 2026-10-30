@@ -1,5 +1,14 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join, normalize } from 'node:path';
 import {
@@ -190,6 +199,77 @@ export function inspectRuntime({
   };
 }
 
+const packageInstallationPaths = prefix => ({
+  package: join(prefix, 'lib', 'node_modules', PACKAGE),
+  command: join(prefix, 'bin', 'pi'),
+  lock: join(prefix, 'lib', 'node_modules', '.package-lock.json'),
+});
+
+const pathExists = path => {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+};
+
+// npm can return non-zero after changing a global prefix, and a syntactically successful install
+// can still leave an unusable entrypoint. Keep the previous package, command and npm lockfile in
+// the same filesystem and restore them when installation or verification fails.
+function backupInstallation(prefix) {
+  mkdirSync(prefix, { recursive: true });
+  const backupRoot = mkdtempSync(join(prefix, '.coda-pi-backup-'));
+  const paths = packageInstallationPaths(prefix);
+  const restore = () => {
+    let firstError = null;
+    for (const [name, path] of Object.entries(paths)) {
+      try {
+        rmSync(path, { recursive: true, force: true });
+      } catch (error) {
+        firstError ??= error;
+      }
+      const backup = join(backupRoot, name);
+      if (!pathExists(backup)) continue;
+      try {
+        mkdirSync(dirname(path), { recursive: true });
+        renameSync(backup, path);
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+    try {
+      rmSync(backupRoot, { recursive: true, force: true });
+    } catch (error) {
+      firstError ??= error;
+    }
+    if (firstError) throw firstError;
+  };
+
+  try {
+    for (const [name, path] of Object.entries(paths)) {
+      if (!pathExists(path)) continue;
+      const backup = join(backupRoot, name);
+      renameSync(path, backup);
+    }
+  } catch (error) {
+    try {
+      restore();
+    } catch (restoreError) {
+      throw new Error(`${error.message}；恢复原 Pi 安装失败：${restoreError.message}`);
+    }
+    throw error;
+  }
+
+  return {
+    restore,
+    commit() {
+      rmSync(backupRoot, { recursive: true, force: true });
+    },
+  };
+}
+
 export function updateLatest({
   env = process.env,
   home = homedir(),
@@ -197,6 +277,7 @@ export function updateLatest({
   run = spawnSync,
   realpath = realpathSync,
   find = findPi,
+  backup = backupInstallation,
 } = {}) {
   const before = inspectRuntime({ env, home, node, run, realpath, find, checkLatest: false });
   const prefix = before.owner.kind === 'none' || before.owner.kind === 'managed'
@@ -217,26 +298,38 @@ export function updateLatest({
       prefix,
     };
   }
-  const result = run(node, [
-    npmCli(node), 'install', '--global', '--prefix', prefix, '--ignore-scripts',
-    '--no-fund', '--no-audit', '--no-update-notifier', `${PACKAGE}@latest`,
-  ], {
-    encoding: 'utf8',
-    timeout: 8 * 60_000,
-    env: withNode(env, node),
-  });
-  if (result.status !== 0) {
-    throw new Error(`安装 Pi 失败：${result.error?.message || result.stderr?.trim() || `npm 退出码 ${result.status ?? result.signal}`}`);
-  }
-
   const verificationPath = before.owner.kind === 'none' || before.owner.kind === 'managed'
     ? managedPi(env, home)
     : before.path;
-  const version = versionOf(verificationPath, { env, node, run });
-  if (!version) throw new Error(`安装完成，但 ${verificationPath} 无法运行`);
-  const afterComparison = compareVersions(version, latest);
-  if (afterComparison === null || afterComparison < 0) {
-    throw new Error(`安装完成，但 Pi ${version} 仍低于 npm latest ${latest}`);
+  const installation = backup(prefix);
+  let version;
+  try {
+    const result = run(node, [
+      npmCli(node), 'install', '--global', '--prefix', prefix, '--ignore-scripts',
+      '--no-fund', '--no-audit', '--no-update-notifier', `${PACKAGE}@${latest}`,
+    ], {
+      encoding: 'utf8',
+      timeout: 8 * 60_000,
+      env: withNode(env, node),
+    });
+    if (result.status !== 0) {
+      throw new Error(`安装 Pi 失败：${result.error?.message || result.stderr?.trim() || `npm 退出码 ${result.status ?? result.signal}`}`);
+    }
+
+    version = versionOf(verificationPath, { env, node, run });
+    if (!version) throw new Error(`安装完成，但 ${verificationPath} 无法运行`);
+    const afterComparison = compareVersions(version, latest);
+    if (afterComparison === null || afterComparison < 0) {
+      throw new Error(`安装完成，但 Pi ${version} 仍低于 npm latest ${latest}`);
+    }
+    installation.commit();
+  } catch (error) {
+    try {
+      installation.restore();
+    } catch (restoreError) {
+      throw new Error(`${error.message}；恢复原 Pi 安装失败：${restoreError.message}`);
+    }
+    throw error;
   }
   return {
     path: verificationPath,

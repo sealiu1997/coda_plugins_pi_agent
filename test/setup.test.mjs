@@ -155,6 +155,14 @@ test('an explicit npm path is protected unless latest policy is enabled', () => 
   assert.equal(setup({ env: latestEnv, home, ...latest.options, find: () => own }), 0);
   assert.equal(latest.updates.length, 1);
   assert.equal(latest.said.at(-1), `已更新到 Pi 1.4.0：${own}`);
+
+  const tooOld = machine({
+    versions: { [own]: () => ({ status: 0, stdout: '1.0.9\n' }) },
+    realpath: path => path === own ? npmActual : path,
+  });
+  assert.equal(setup({ env: latestEnv, home, ...tooOld.options, find: () => own }), 0);
+  assert.equal(tooOld.updates.length, 1);
+  assert.equal(tooOld.said.at(-1), `已更新到 Pi 1.4.0：${own}`);
 });
 
 test('follow-latest updates a recognized npm global install in its own prefix', () => {
@@ -210,6 +218,40 @@ test('installer failures become the final setup line', () => {
   const m = machine({ updateResult: new Error('network unavailable') });
   assert.equal(setup({ env: {}, home, ...m.options, find: () => 'pi' }), 1);
   assert.match(m.said.at(-1), /^! 安装 Pi 失败：network unavailable/);
+});
+
+test('an update failure preserves an existing supported Pi', () => {
+  const external = '/opt/homebrew/bin/pi';
+  const m = machine({
+    versions: { [external]: () => ({ status: 0, stdout: '1.4.0\n' }) },
+    updateResult: new Error('npm registry unavailable'),
+    realpath: () => '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
+  });
+  const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.updateLatest': true }) };
+  assert.equal(setup({ env, home, ...m.options, find: () => external }), 0);
+  assert.equal(m.updates.length, 1);
+  assert.match(m.said.at(-1), /继续使用已有的 Pi 1\.4\.0.*npm registry unavailable/);
+});
+
+test('legacy managed installs are reused, upgraded, or reported when migration fails', () => {
+  const legacy = legacyManagedPi({ CODA_PLUGIN_STATE: state });
+  const current = machine({ versions: { [legacy]: () => ({ status: 0, stdout: '1.4.0\n' }) } });
+  assert.equal(setup({ env: { CODA_PLUGIN_STATE: state }, home, ...current.options, find: () => legacy }), 0);
+  assert.equal(current.updates.length, 0);
+
+  const old = machine({
+    versions: { [legacy]: () => ({ status: 0, stdout: '1.0.9\n' }) },
+  });
+  assert.equal(setup({ env: { CODA_PLUGIN_STATE: state }, home, ...old.options, find: () => legacy }), 0);
+  assert.equal(old.updates.length, 1);
+
+  const failed = machine({
+    versions: { [legacy]: () => ({ status: 0, stdout: '1.0.9\n' }) },
+    updateResult: new Error('migration failed'),
+  });
+  assert.equal(setup({ env: { CODA_PLUGIN_STATE: state }, home, ...failed.options, find: () => legacy }), 1);
+  assert.equal(failed.updates.length, 1);
+  assert.match(failed.said.at(-1), /更新 Pi 失败：migration failed/);
 });
 
 test('manifest and minimum-version metadata agree with the managed local runtime', async () => {
