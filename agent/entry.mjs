@@ -70,12 +70,15 @@ class SessionState {
   }
 }
 
-// Pi is the exact npm dependency installed with this plugin. pi.commandPath may explicitly
-// override it with an externally managed executable; PATH never changes the default.
+// Resolve the device Pi once at startup. An explicit pi.commandPath wins; otherwise discovery
+// checks PATH and common install locations before falling back to a plugin-managed install.
 const piCommand = resolvePiLaunch(settings, { pluginPath, node: codaNode });
 
 // Refuse unsupported or unknown Pi versions before opening any session.
-const getPiVersion = async () => assertPiVersion(await piVersion(piCommand), piCommand);
+const getPiVersion = async () => assertPiVersion(
+  await piVersion(piCommand, { env: process.env, node: codaNode }),
+  piCommand,
+);
 
 // ---- Build available commands ----
 function buildAvailableCommands(session) {

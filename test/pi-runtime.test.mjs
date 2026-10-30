@@ -10,6 +10,7 @@ import {
   npmOwner,
   runtimeOwner,
   updateLatest,
+  wrapperTarget,
 } from '../agent/pi-runtime.mjs';
 
 const home = '/home/me';
@@ -122,6 +123,54 @@ test('runtimeOwner distinguishes managed npm packages from custom executables', 
     prefix: '/opt/homebrew',
     actual: '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
   });
+});
+
+test('runtimeOwner follows a conservative shell wrapper into its npm installation', () => {
+  const wrapper = join(home, '.local/bin/pi');
+  const target = '/opt/homebrew/bin/pi';
+  const actual = '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js';
+  const source = [
+    '#!/bin/sh',
+    'export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"',
+    `exec ${target} "$@"`,
+    '',
+  ].join('\n');
+  const options = {
+    env: {},
+    home,
+    realpath: path => path === wrapper ? wrapper : path,
+    readFile: path => {
+      if (path === wrapper) return source;
+      throw new Error('not a wrapper');
+    },
+  };
+  assert.equal(wrapperTarget(wrapper, options), target);
+  assert.deepEqual(runtimeOwner(wrapper, {
+    ...options,
+    realpath: path => path === wrapper ? wrapper : path === target ? actual : path,
+  }), {
+    kind: 'npm',
+    prefix: '/opt/homebrew',
+    actual,
+  });
+});
+
+test('wrapperTarget rejects shell logic it cannot identify safely', () => {
+  const wrapper = join(home, 'pi');
+  const cases = [
+    `#!/bin/sh\nexec "$PI_BIN" "$@"\n`,
+    `#!/bin/sh\nexec ../bin/pi "$@"\n`,
+    `#!/bin/sh\necho unsafe\nexec /opt/homebrew/bin/pi "$@"\n`,
+    `#!/bin/sh\nexec /opt/homebrew/bin/pi "$@"\nexec /tmp/other "$@"\n`,
+    `#!/usr/bin/env node\nconsole.log("1.4.0")\n`,
+    `#!/bin/sh\nPATH=/one\nPATH=/two\nexec /opt/homebrew/bin/pi "$@"\n`,
+  ];
+  for (const source of cases) {
+    assert.equal(wrapperTarget(wrapper, {
+      realpath: path => path,
+      readFile: () => source,
+    }), null, source);
+  }
 });
 
 test('inspectRuntime reports a missing, current or outdated runtime', () => {

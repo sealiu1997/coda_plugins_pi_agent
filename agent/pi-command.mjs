@@ -146,17 +146,30 @@ export function assertPiVersion(version, launch) {
 }
 
 const runFile = promisify(execFile);
-const versionKey = launch => JSON.stringify([normalizePiLaunch(launch).command, normalizePiLaunch(launch).prefixArgs]);
+const versionKey = (launch, env, node) => JSON.stringify([
+  normalizePiLaunch(launch).command,
+  normalizePiLaunch(launch).prefixArgs,
+  node,
+  env?.PATH ?? '',
+]);
 
 // The version Pi reports, cached per launch. The fallback stands in when the runtime cannot
 // run, so callers never wait or throw here.
 const versionCache = new Map();
-export async function piVersion(piCommand, { timeout = 5000, fallback = null } = {}) {
+export async function piVersion(piCommand, {
+  timeout = 5000,
+  fallback = null,
+  env = process.env,
+  node = process.env.CODA_NODE || process.execPath,
+} = {}) {
   const launch = normalizePiLaunch(piCommand);
-  const key = versionKey(launch);
+  const key = versionKey(launch, env, node);
   if (!versionCache.has(key)) {
     try {
-      const { stdout, stderr } = await runFile(launch.command, launchArgs(launch, ['--version']), { timeout });
+      const { stdout, stderr } = await runFile(launch.command, launchArgs(launch, ['--version']), {
+        timeout,
+        env: envForPiCommand(env, launch, node),
+      });
       versionCache.set(key, parsePiVersion(`${stdout ?? ''}\n${stderr ?? ''}`));
     } catch (error) {
       process.stderr.write(`[pi-agent] Pi --version failed: ${error.message}\n`);

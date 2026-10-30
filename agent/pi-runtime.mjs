@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join, normalize } from 'node:path';
 import {
@@ -83,12 +83,66 @@ export function npmOwner(command, { realpath = realpathSync } = {}) {
   return at > 0 ? { kind: 'npm', prefix: actual.slice(0, at), actual } : null;
 }
 
+// Resolve the narrow shell-wrapper shape used by Homebrew/npm users to forward Pi into a
+// non-interactive PATH. This never executes the wrapper and rejects scripts with any other
+// commands, variable targets, relative targets or multiple exec statements.
+export function wrapperTarget(command, {
+  realpath = realpathSync,
+  readFile = readFileSync,
+  depth = 0,
+  seen = new Set(),
+} = {}) {
+  if (!command || depth >= 4) return null;
+  const requested = normalize(command);
+  let actual;
+  try {
+    actual = normalize(realpath(requested));
+  } catch {
+    return null;
+  }
+  // Symlinks are already handled by npmOwner. Only inspect a wrapper stored at the command path.
+  if (actual !== requested) return null;
+  if (seen.has(actual)) return null;
+  seen.add(actual);
+
+  let source;
+  try {
+    source = readFile(actual, 'utf8');
+  } catch {
+    return null;
+  }
+  if (typeof source !== 'string' || source.length > 64 * 1024) return null;
+  const lines = source.split(/\r?\n/);
+  if (!/^#!\/(?:usr\/bin\/env\s+(?:sh|bash)|bin\/(?:sh|bash))$/.test(lines[0]?.trim() ?? '')) {
+    return null;
+  }
+  const body = lines.slice(1).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+  if (!body.length) return null;
+
+  const execLines = body.filter(line => /^exec(?:\s|$)/.test(line));
+  if (execLines.length !== 1 || body.at(-1) !== execLines[0]) return null;
+  const match = /^exec\s+(\/[^\s'"]+)\s+"\$@"$/.exec(execLines[0]);
+  if (!match) return null;
+  const commands = body.slice(0, -1);
+  const pathAssignment = /^(?:export\s+)?PATH=(?:"[^"\r\n]*"|'[^'\r\n]*'|[A-Za-z0-9_./:+@%{}$-]+)$/;
+  if (commands.length > 1 || commands.some(line => !pathAssignment.test(line))) return null;
+
+  const target = normalize(match[1]);
+  return wrapperTarget(target, { realpath, readFile, depth: depth + 1, seen }) ?? target;
+}
+
 // A custom executable at ~/.local/bin is external unless its symlink resolves into the npm
 // package this plugin installed. That protects user scripts while still recognizing npm.
-export function runtimeOwner(path, { env = process.env, home = homedir(), realpath = realpathSync } = {}) {
+export function runtimeOwner(path, {
+  env = process.env,
+  home = homedir(),
+  realpath = realpathSync,
+  readFile = readFileSync,
+} = {}) {
   if (!path || path === 'pi') return { kind: 'none' };
   if (path === legacyManagedPi(env)) return { kind: 'managed' };
-  const npm = npmOwner(path, { realpath });
+  const ownerPath = wrapperTarget(path, { realpath, readFile }) ?? path;
+  const npm = npmOwner(ownerPath, { realpath });
   if (!npm) return { kind: 'external' };
   const prefix = normalize(managedPrefix(env, home)).replaceAll('\\', '/');
   let actualPrefix = prefix;

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, chmod, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, chmod, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { piVersion } from "../agent/pi-command.mjs";
@@ -76,6 +76,25 @@ test("piVersion runs a plugin-managed launch through CODA_NODE", async () => {
       prefixArgs: [cli],
       cliPath: cli,
       kind: "managed",
+    }), "1.4.0");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("piVersion finds node through the injected PATH for an absolute Pi command", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-version-path-"));
+  try {
+    const nodeDir = join(dir, "node-bin");
+    const piDir = join(dir, "pi-bin");
+    await mkdir(nodeDir);
+    await mkdir(piDir);
+    await symlink(process.execPath, join(nodeDir, "node"));
+    const pi = join(piDir, "pi");
+    await writeFile(pi, "#!/usr/bin/env node\nconsole.log('1.4.0');\n", { mode: 0o755 });
+    assert.equal(await piVersion(pi, {
+      env: { PATH: nodeDir },
+      node: join(nodeDir, "node"),
     }), "1.4.0");
   } finally {
     await rm(dir, { recursive: true, force: true });
