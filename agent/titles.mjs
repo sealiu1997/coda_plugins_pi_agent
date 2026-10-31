@@ -9,6 +9,7 @@
 // `session_info_changed` hands it to Coda from there.
 import { spawn } from 'node:child_process';
 import { envForPi } from './pi-env.mjs';
+import { launchArgs, normalizePiLaunch } from './pi-command.mjs';
 
 const TITLE_TIMEOUT = 30000;
 const TITLE_PROMPT = '用一句话给下面的对话起一个不超过 16 个字的中文会话标题。只回答标题本身，不要任何解释、引号或标点结尾。';
@@ -76,6 +77,7 @@ export function titleMaterial(firstPrompt, firstReply) {
 export async function generateTitle(piCommand, cwd, model, dialogue, { timeout = TITLE_TIMEOUT, spawnFn = spawn, env = process.env, node, extensionPaths = [] } = {}) {
   if (!dialogue) return null;
   if (shuttingDown) return null;
+  const launch = normalizePiLaunch(piCommand);
   const args = [
     '--print', '--mode', 'text', '--no-session', '--no-tools', '--no-extensions', '--no-mcp',
     '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files', '--thinking', 'off',
@@ -86,7 +88,11 @@ export async function generateTitle(piCommand, cwd, model, dialogue, { timeout =
   return new Promise(resolve => {
     let child;
     try {
-      child = spawnFn(piCommand, args, { cwd, env: envForPi(env, piCommand, node), stdio: ['ignore', 'pipe', 'ignore'] });
+      child = spawnFn(launch.command, launchArgs(launch, args), {
+        cwd,
+        env: envForPi(env, launch, node),
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
     } catch {
       resolve(null);
       return;

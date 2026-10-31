@@ -24,3 +24,12 @@ test("explicit long and short extension flags are extracted for the isolated tit
 test("an extension flag without a path and unrelated args add no title extension", () => {
   assert.deepEqual(extensionPathsFromArgs(["--extension", "--verbose", "-e=", "--model", "p/m"]), []);
 });
+
+test('all four extension spellings become valid Pi CLI arguments', () => {
+  for (const form of ['--extension /a','-e /a','--extension=/a','-e=/a']) {
+    const args=parsePiExtraArgs(form);
+    assert.deepEqual(extensionPathsFromArgs(args),['/a']);
+    assert.equal(args.length,2); assert.ok(['--extension','-e'].includes(args[0]));
+    assert.deepEqual(parsePiExtraArgs(form.split(' ')),args);
+  }
+});

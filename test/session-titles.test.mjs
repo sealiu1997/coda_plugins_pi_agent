@@ -21,6 +21,7 @@ const FAKE_PI = `#!${process.execPath}
 import { appendFileSync, openSync, writeSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { createInterface } from "node:readline";
+if (process.argv.includes("--version")) { console.log("1.1.0"); process.exit(0); }
 if (process.argv.includes("--print")) {
   const extensions = [];
   for (let i = 0; i < process.argv.length; i++) {

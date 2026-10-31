@@ -1,0 +1,27 @@
+name: Compatibility
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  stable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify checker pin
+        run: node --input-type=module -e "import assert from 'node:assert/strict'; import fs from 'node:fs'; assert.equal(JSON.parse(fs.readFileSync('node_modules/@coda-console/plugin-check/package.json')).version, '0.5.8')"
+      - run: npm test
+      - run: npm run check:coda
+      - run: npm run check:fake-live
+      - run: npm run check:pi:verified
+      - run: git diff --exit-code

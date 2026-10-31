@@ -29,6 +29,31 @@ test("PiRpc is active from spawn until close", async t => {
   assert.equal(piProcesses().includes(rpc), false);
 });
 
+test("PiRpc runs a plugin-managed JavaScript entry through Node", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-rpc-managed-"));
+  const cli = join(dir, "cli.js");
+  await writeFile(cli, "setInterval(() => {}, 1000);\n");
+  t.after(() => rm(dir, { recursive: true, force: true }));
+
+  const rpc = new PiRpc({
+    piCommand: {
+      command: process.execPath,
+      prefixArgs: [cli],
+      cliPath: cli,
+      kind: "managed",
+    },
+    args: [],
+    cwd: dir,
+    env: process.env,
+  });
+  const exited = rpc.waitForExit();
+  rpc.spawn();
+  assert.equal(rpc.exited, false);
+  rpc.kill("SIGTERM");
+  await exited;
+  assert.equal(rpc.exited, true);
+});
+
 test("a missing Pi is never registered as an active process", async t => {
   const dir = await mkdtemp(join(tmpdir(), "pi-rpc-missing-"));
   t.after(() => rm(dir, { recursive: true, force: true }));

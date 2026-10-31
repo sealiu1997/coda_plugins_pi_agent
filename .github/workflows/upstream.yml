@@ -1,0 +1,39 @@
+name: Upstream compatibility advisory
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+concurrency:
+  group: upstream-compatibility-advisory
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  latest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        timeout-minutes: 2
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        timeout-minutes: 2
+      # Probe worst case: 7 × 1m metadata/git + 9m install + 1.5m live + 10m Pi, plus cleanup < 30m.
+      # 40m job budget also covers setup and leaves up to 3m for failure artifacts.
+      - name: Probe floating upstreams (advisory only)
+        timeout-minutes: 30
+        run: npm run probe:upstream
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        timeout-minutes: 3
+        if: always()
+        with:
+          name: upstream-compatibility
+          path: compat-reports/
+          if-no-files-found: error
+          retention-days: 30

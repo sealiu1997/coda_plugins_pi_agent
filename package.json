@@ -2,8 +2,8 @@
   "name": "@coda-console/pi",
   "id": "pi",
   "displayName": "Pi",
-  "description": "Pi Agent 插件：把本机安装的 Pi coding agent 以 RPC 模式接入 Coda，支持会话指令、模型与推理强度选择、插话和会话恢复。",
-  "version": "0.3.1",
+  "description": "Pi Agent 插件：接管本机已有 Pi，缺失时自动安装，并可随 npm 最新版更新，以 RPC 模式接入 Coda。",
+  "version": "0.5.0",
   "categories": [
     "Agent"
   ],
@@ -25,7 +25,7 @@
           "${PI_CODING_AGENT_DIR:-~/.pi/agent}/settings.json",
           "${PI_CODING_AGENT_DIR:-~/.pi/agent}/models.json"
         ],
-        "setupHint": "插件会自动安装 Pi；装不上时在插件页重试准备运行环境，或自己安装 `npm i -g @earendil-works/pi-coding-agent`。再在 Coda 里添加 provider，或在 pi 里登录"
+        "setupHint": "插件会接管这台机器已有的 Pi；未安装时自动安装 npm latest 到 ~/.local/bin。在设置中打开「Pi 跟随最新版」并保存可更新。装不上时在插件页重试准备运行环境"
       }
     ],
     "configuration": {
@@ -33,19 +33,26 @@
         "pi.commandPath": {
           "type": "string",
           "default": "pi",
-          "description": "pi 可执行文件的路径；留为 pi 时使用 PATH 和常见安装目录。",
+          "description": "留为 pi 时依次使用 PATH、常见 npm/Homebrew/Bun 安装和插件安装到 ~/.local/bin 的 Pi；填命令或绝对路径可强制指定。显式路径不会被静默替换。",
           "order": 1
+        },
+        "pi.updateLatest": {
+          "type": "boolean",
+          "title": "Pi 跟随最新版",
+          "default": false,
+          "description": "打开并保存设置后，Coda 会运行准备环境，把可识别的 npm 或插件管理的 Pi 更新到 npm latest。关闭时只接管并验证已有 Pi，未安装时才安装 latest；非 npm 的自定义安装不会被覆盖。",
+          "order": 2
         },
         "pi.extraArgs": {
           "type": "string",
           "default": "",
           "description": "追加到 pi --mode rpc 的额外参数，按空白分隔。",
-          "order": 2
+          "order": 3
         },
         "pi.providers": {
           "type": "object",
           "title": "Provider",
-          "order": 3,
+          "order": 4,
           "description": "一行一个 provider，行名是 Pi 里的 provider 名（不带 /）。选一个插件提供的模型服务，或自己填地址和 Key；模型从「地址/models」列出，在 Coda 点「重新读取模型」即刷新。",
           "additionalProperties": {
             "type": "object",
@@ -112,6 +119,9 @@
       "command": "exec \"$CODA_NODE\" \"$CODA_PLUGIN_PATH/agent/setup.mjs\""
     }
   },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -123,5 +133,19 @@
   "files": [
     "agent",
     "icons"
-  ]
+  ],
+  "devDependencies": {
+    "@coda-console/plugin-check": "0.5.8",
+    "@earendil-works/pi-coding-agent": "1.4.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check:coda": "coda-plugin-check . --manifest && node scripts/check-fake-live.mjs --handshake",
+    "check:pi": "node scripts/check-pi-compat.mjs",
+    "check:pi:verified": "node scripts/check-pi-compat.mjs --pi ./node_modules/.bin/pi",
+    "check:fake-live": "node scripts/check-fake-live.mjs",
+    "check:real-live": "coda-plugin-check . --live",
+    "probe:upstream": "node scripts/probe-upstream.mjs"
+  },
+  "dependencies": {}
 }

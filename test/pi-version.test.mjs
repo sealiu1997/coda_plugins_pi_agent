@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, chmod, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, chmod, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { piVersion } from "../agent/pi-command.mjs";
@@ -66,6 +66,54 @@ test("piVersion caches per command", async () => {
   }
 });
 
+test("piVersion runs a plugin-managed launch through CODA_NODE", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-version-managed-"));
+  try {
+    const cli = join(dir, "cli.js");
+    await writeFile(cli, "console.log('1.4.0');\n");
+    assert.equal(await piVersion({
+      command: process.execPath,
+      prefixArgs: [cli],
+      cliPath: cli,
+      kind: "managed",
+    }), "1.4.0");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("piVersion finds node through the injected PATH for an absolute Pi command", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-version-path-"));
+  try {
+    const nodeDir = join(dir, "node-bin");
+    const piDir = join(dir, "pi-bin");
+    await mkdir(nodeDir);
+    await mkdir(piDir);
+    await symlink(process.execPath, join(nodeDir, "node"));
+    const pi = join(piDir, "pi");
+    await writeFile(pi, "#!/usr/bin/env node\nconsole.log('1.4.0');\n", { mode: 0o755 });
+    assert.equal(await piVersion(pi, {
+      env: { PATH: nodeDir },
+      node: join(nodeDir, "node"),
+    }), "1.4.0");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("piVersion retries after a transient version-check failure", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-version-retry-"));
+  try {
+    const pi = join(dir, "pi");
+    await writeFile(pi, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    assert.equal(await piVersion(pi), null);
+    await writeFile(pi, "#!/bin/sh\necho 1.4.0\n", { mode: 0o755 });
+    assert.equal(await piVersion(pi), "1.4.0");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("the plugin version fallback ends at 'unknown' when package.json cannot be read", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-version-"));
   try {
@@ -83,4 +131,13 @@ test("the plugin version fallback ends at 'unknown' when package.json cannot be 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('runtime version floor rejects old, unknown and prerelease versions with upgrade guidance', async () => {
+  const { supportedVersion, assertPiVersion } = await import('../agent/pi-command.mjs');
+  for (const value of [null,'?','1.0.99','1.1.0-beta.1','garbage']) {
+    assert.equal(supportedVersion(value),false);
+    assert.throws(()=>assertPiVersion(value,'/external/pi'),/最低版本 1.1.0.*跟随最新版.*原来的安装工具升级/s);
+  }
+  for (const value of ['1.1.0','1.1.1','1.10.0','2.0.0','1.1.0+build']) assert.equal(supportedVersion(value),true);
 });

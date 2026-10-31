@@ -1,7 +1,7 @@
 // Manages a Pi child process in RPC mode with request correlation and event routing.
 import { spawn } from 'node:child_process';
 import { readLines } from './lines.mjs';
-import { dirname } from 'node:path';
+import { launchArgs, normalizePiLaunch } from './pi-command.mjs';
 
 const log = (...args) => process.stderr.write(`[pi-rpc] ${args.join(' ')}\n`);
 const activeProcesses = new Set();
@@ -20,7 +20,7 @@ export class PiRpc {
     this._exited = false;
     this._stderrTail = '';
     this._child = null;
-    this._piCommand = piCommand;
+    this._piCommand = normalizePiLaunch(piCommand);
     this._args = args;
     this._cwd = cwd;
     this._env = env;
@@ -28,7 +28,7 @@ export class PiRpc {
   }
 
   spawn() {
-    const child = spawn(this._piCommand, this._args, {
+    const child = spawn(this._piCommand.command, launchArgs(this._piCommand, this._args), {
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd: this._cwd,
       env: this._env,

@@ -71,6 +71,28 @@ test("a title loads the requested model extensions explicitly", async () => {
   ]);
 });
 
+test("a title runs a plugin-managed entry through CODA_NODE", async () => {
+  const seen = [];
+  const cli = "/plugin/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js";
+  const spawnFn = (command, args) => {
+    seen.push({ command, args });
+    return { pid: 1, stdout: { on: () => {}, destroy: () => {} }, once: () => {}, on: () => {}, kill: () => {} };
+  };
+  await generateTitle({
+    command: "/coda/node/bin/node",
+    prefixArgs: [cli],
+    cliPath: cli,
+    kind: "managed",
+  }, "/tmp", null, "用户：打包插件", {
+    spawnFn,
+    timeout: 100,
+    node: "/coda/node/bin/node",
+  });
+  assert.equal(seen[0].command, "/coda/node/bin/node");
+  assert.equal(seen[0].args[0], cli);
+  assert.equal(seen[0].args[1], "--print");
+});
+
 test("a running title child is exposed for shutdown and removed when it closes", async () => {
   const closeCallbacks = [];
   const child = {
