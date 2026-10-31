@@ -250,6 +250,23 @@ test('main never writes an unaccepted baseline; accept is explicit; ordinary run
 });
 
 
+test('without --pi the scan checks the Pi the plugin would discover', async t => {
+  const dir = fixture(t), snapshotPath = join(dir,'snapshot.json'), surfacePath = write(dir,'surface.json',JSON.stringify({...minimal,contracts:[]}));
+  const executable = write(dir,'dist/cli.js',`#!${process.execPath}\nconsole.log('1.0.0');\n`);
+  const {chmodSync} = await import('node:fs'); chmodSync(executable,0o755);
+  const settings = process.env.CODA_PLUGIN_SETTINGS;
+  process.env.CODA_PLUGIN_SETTINGS = JSON.stringify({'pi.commandPath':executable});
+  const originalLog = console.log; const output = []; console.log = s=>output.push(s);
+  t.after(()=>{ console.log = originalLog; if (settings === undefined) delete process.env.CODA_PLUGIN_SETTINGS; else process.env.CODA_PLUGIN_SETTINGS = settings; });
+  const commands = [];
+  const run = async (command,args) => { commands.push(command); return {stdout:args.includes('--version') ? '1.0.0' : help}; };
+  assert.equal(await main(['--json'],{snapshotPath,surfacePath,run,probeFn:async()=>probeResults()}),2);
+  const report = JSON.parse(output.at(-1));
+  assert.equal(report.exitCode,2);
+  assert.equal(report.command,executable);
+  assert.deepEqual([...new Set(commands)],[executable]);
+});
+
 test('aliased enum values are resolved and new required extension fields fail', t => {
   const c = current(t);
   c.db.set('Alias', {body:'ThinkingLevel | "new"',file:'fixture'});

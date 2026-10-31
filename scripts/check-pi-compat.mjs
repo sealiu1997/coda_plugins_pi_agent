@@ -8,6 +8,7 @@ import { createInterface } from 'node:readline';
 import {
   PACKAGE,
   launchArgs,
+  normalizePiLaunch,
   parsePiVersion,
   resolvePiLaunch,
 } from '../agent/pi-command.mjs';
@@ -422,7 +423,7 @@ export async function main(args = process.argv.slice(2), { run, remove = rmSync,
     const node = process.env.CODA_NODE || process.execPath;
     let launch = options.pi
       ? { command: resolve(options.pi), prefixArgs: [], kind: 'external' }
-      : resolvePiLaunch(JSON.parse(process.env.CODA_PLUGIN_SETTINGS || '{}'), { pluginPath: root, node });
+      : normalizePiLaunch(resolvePiLaunch(JSON.parse(process.env.CODA_PLUGIN_SETTINGS || '{}')));
     if (options.install) {
       const npm = join(dirname(node), '../lib/node_modules/npm/bin/npm-cli.js');
       if (!existsSync(npm)) throw new Error(`当前 Node 没带 npm：${npm}`);
