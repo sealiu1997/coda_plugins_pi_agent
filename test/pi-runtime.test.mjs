@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -8,15 +8,18 @@ import {
   readFileSync,
   readdirSync,
   readlinkSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, normalize } from 'node:path';
+import { dirname, join, normalize } from 'node:path';
 import { managedPi, managedPrefix, PACKAGE, versionOf } from '../agent/pi-command.mjs';
 import {
+  RollbackError,
+  acquireUpdateLock,
   compareVersions,
   inspectRuntime,
   latestVersion,
@@ -36,7 +39,6 @@ const npm = '/coda/node/lib/node_modules/npm/bin/npm-cli.js';
 const own = managedPi({}, home);
 const managedActual = join(home, '.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js');
 const managedRealpath = path => path === own ? managedActual : path;
-const noBackup = () => ({ restore() {}, commit() {} });
 const backupName = '.coda-pi-backup-';
 const transactionRecordPath = (stateDir, prefix) => join(
   stateDir,
@@ -44,19 +46,39 @@ const transactionRecordPath = (stateDir, prefix) => join(
   `${createHash('sha256').update(normalize(prefix)).digest('hex')}.json`,
 );
 
+const stageOf = args => args[args.indexOf('--prefix') + 1];
+const leftovers = prefix => readdirSync(prefix).filter(name => name.startsWith('.coda-pi-'));
+const lockPath = prefix => join(prefix, '.coda-pi-update.lock');
+const lockOwners = prefix => readdirSync(lockPath(prefix)).filter(name => name.startsWith('owner-'));
+const deadPid = 999_999_999;
+
+function holdLock(prefix, pid = deadPid) {
+  const lock = lockPath(prefix);
+  mkdirSync(lock, { recursive: true });
+  const owner = `owner-${pid}-${randomUUID()}`;
+  writeFileSync(join(lock, owner), '');
+  return owner;
+}
+
+// The shape npm gives a global install: the package under lib/node_modules and a relative bin link.
+function writeInstall(prefix, version) {
+  const bundle = join(prefix, 'lib/node_modules', PACKAGE, 'dist/bundle');
+  mkdirSync(bundle, { recursive: true });
+  writeFileSync(join(bundle, 'cli.js'), `${version}\n`);
+  mkdirSync(join(prefix, 'bin'), { recursive: true });
+  rmSync(join(prefix, 'bin/pi'), { force: true });
+  symlinkSync(`../lib/node_modules/${PACKAGE}/dist/bundle/cli.js`, join(prefix, 'bin/pi'));
+}
+
 function packageFixture(t, version = '1.2.0') {
-  const root = mkdtempSync(join(tmpdir(), 'pi-runtime-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'pi-runtime-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const prefix = join(root, 'prefix');
   const packageDir = join(prefix, 'lib/node_modules', PACKAGE);
   const cli = join(packageDir, 'dist/bundle/cli.js');
   const command = join(prefix, 'bin/pi');
   const commandTarget = `../lib/node_modules/${PACKAGE}/dist/bundle/cli.js`;
-  mkdirSync(join(packageDir, 'dist/bundle'), { recursive: true });
-  mkdirSync(join(prefix, 'bin'), { recursive: true });
-  writeFileSync(cli, `${version}\n`);
-  symlinkSync(commandTarget, command);
-  const realpath = path => path === command ? cli : path;
+  writeInstall(prefix, version);
   const writePackageVersion = value => {
     mkdirSync(join(packageDir, 'dist/bundle'), { recursive: true });
     writeFileSync(cli, `${value}\n`);
@@ -67,17 +89,39 @@ function packageFixture(t, version = '1.2.0') {
     states: [
       { name: 'package', path: packageDir, existed: true, moved: false, restored: false, ...states?.package },
       { name: 'command', path: command, existed: true, moved: false, restored: false, ...states?.command },
-      {
-        name: 'lock',
-        path: join(prefix, 'lib/node_modules/.package-lock.json'),
-        existed: false,
-        moved: false,
-        restored: false,
-        ...states?.lock,
-      },
     ],
   });
-  return { root, prefix, packageDir, cli, command, commandTarget, realpath, writePackageVersion, transaction };
+  return { root, prefix, packageDir, cli, command, commandTarget, writePackageVersion, transaction };
+}
+
+// npm and Pi on a real temporary filesystem: `pi --version` prints the file its command resolves to.
+function npmMachine({
+  latest = '1.4.0',
+  install = args => writeInstall(stageOf(args), latest),
+  aliases = {},
+  version = () => null,
+} = {}) {
+  const installs = [];
+  const run = (command, args) => {
+    if (command === node && args[0] === npm && args[1] === 'view') {
+      return { status: 0, stdout: JSON.stringify(latest) };
+    }
+    if (command === node && args[0] === npm && args[1] === 'install') {
+      installs.push(args);
+      return install(args) ?? { status: 0 };
+    }
+    if (args.includes('--version')) {
+      const scripted = version(command);
+      if (scripted) return scripted;
+      try {
+        return { status: 0, stdout: readFileSync(aliases[command] ?? command, 'utf8') };
+      } catch {
+        return { status: 1, stderr: 'missing' };
+      }
+    }
+    return { status: 1 };
+  };
+  return { run, installs };
 }
 
 function runFor({
@@ -259,46 +303,50 @@ test('inspectRuntime reports a missing, current or outdated runtime', () => {
   assert.equal(old.updateAvailable, true);
 });
 
-test('updateLatest installs into ~/.local for a missing Pi', () => {
-  const m = runFor();
-  let present = false;
+test('updateLatest installs into ~/.local for a missing Pi through a stage', t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'pi-missing-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const prefix = managedPrefix({}, root);
+  const command = managedPi({}, root);
+  const m = npmMachine();
+
   const result = updateLatest({
     env: {},
-    home,
+    home: root,
     node,
-    run: (command, args, options) => {
-      const value = m.run(command, args, options);
-      if (command === node && args[1] === 'install') present = true;
-      return value;
-    },
-    find: () => present ? own : 'pi',
-    realpath: managedRealpath,
-    backup: noBackup,
+    run: m.run,
+    find: () => existsSync(command) ? command : 'pi',
   });
   assert.equal(result.version, '1.4.0');
   assert.equal(result.installed, true);
-  const install = m.ran.find(args => args[0] === node && args[2] === 'install');
-  assert.deepEqual(install, [
-    node, npm, 'install', '--global', '--prefix', managedPrefix({}, home), '--ignore-scripts',
+  assert.equal(result.path, command);
+  assert.equal(m.installs.length, 1);
+  const [install] = m.installs;
+  assert.ok(stageOf(install).startsWith(join(prefix, '.coda-pi-stage-')));
+  assert.deepEqual(install.toSpliced(4, 1), [
+    npm, 'install', '--global', '--prefix', '--ignore-scripts',
     '--no-fund', '--no-audit', '--no-update-notifier', `${PACKAGE}@1.4.0`,
   ]);
+  assert.equal(readFileSync(command, 'utf8'), '1.4.0\n');
+  assert.deepEqual(leftovers(prefix), []);
 });
 
-test('updateLatest updates a recognized npm global install in its own prefix', () => {
-  const m = runFor({ installedVersion: '1.2.0', afterInstallVersion: '1.4.0' });
-  const external = '/opt/homebrew/bin/pi';
-  const result = updateLatest({
-    env: {},
-    home,
-    node,
-    run: m.run,
-    find: () => external,
-    realpath: () => '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
-    backup: noBackup,
+test('npm writes only the stage; the existing npm install changes after the staged Pi runs', t => {
+  const fixture = packageFixture(t);
+  const m = npmMachine({
+    install: args => {
+      assert.notEqual(stageOf(args), fixture.prefix);
+      assert.equal(readFileSync(fixture.cli, 'utf8'), '1.2.0\n');
+      writeInstall(stageOf(args), '1.4.0');
+    },
   });
+
+  const result = updateLatest({ env: {}, home: fixture.root, node, run: m.run, find: () => fixture.command });
   assert.equal(result.version, '1.4.0');
-  const install = m.ran.find(args => args[0] === node && args[2] === 'install');
-  assert.equal(install[5], '/opt/homebrew');
+  assert.equal(result.prefix, fixture.prefix);
+  assert.equal(readFileSync(fixture.cli, 'utf8'), '1.4.0\n');
+  assert.equal(readlinkSync(fixture.command), fixture.commandTarget);
+  assert.deepEqual(leftovers(fixture.prefix), []);
 });
 
 test('updateLatest skips npm when the installed Pi is already latest', () => {
@@ -311,7 +359,6 @@ test('updateLatest skips npm when the installed Pi is already latest', () => {
     run: m.run,
     find: () => external,
     realpath: () => '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
-    backup: noBackup,
   });
   assert.equal(result.version, '1.4.0');
   assert.equal(result.latest, '1.4.0');
@@ -319,122 +366,80 @@ test('updateLatest skips npm when the installed Pi is already latest', () => {
   assert.equal(m.ran.some(args => args[2] === 'install'), false);
 });
 
-test('updateLatest refuses custom installers and reports npm failures', () => {
+test('updateLatest refuses custom installers before contacting npm', () => {
   const custom = runFor({ commandVersions: { '/custom/pi': () => ({ status: 0, stdout: '1.4.0' }) } });
   assert.throws(() => updateLatest({
     env: {}, home, node, run: custom.run, find: () => '/custom/pi', realpath: () => '/custom/pi',
-    backup: noBackup,
   }), /无法自动升级/);
   assert.equal(custom.ran.some(args => args[2] === 'install'), false);
-
-  const failed = runFor({ installStatus: 1, installedVersion: '1.2.0' });
-  assert.throws(() => updateLatest({
-    env: {}, home, node, run: failed.run, find: () => own, realpath: managedRealpath,
-    backup: noBackup,
-  }), /npm failed/);
 });
 
-test('a failed verification restores the previous npm installation', t => {
-  const root = mkdtempSync(join(tmpdir(), 'pi-rollback-'));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const prefix = join(root, 'prefix');
-  const packageDir = join(prefix, 'lib/node_modules/@earendil-works/pi-coding-agent');
-  const cli = join(packageDir, 'dist/bundle/cli.js');
-  const command = join(prefix, 'bin/pi');
-  const commandTarget = '../lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js';
-  mkdirSync(join(packageDir, 'dist/bundle'), { recursive: true });
-  mkdirSync(join(prefix, 'bin'), { recursive: true });
-  writeFileSync(cli, "console.log('1.2.0');\n");
-  symlinkSync(commandTarget, command);
-
-  let installing = false;
-  const run = (_command, args) => {
-    if (args[0] === npm && args[1] === 'view') return { status: 0, stdout: JSON.stringify('1.4.0') };
-    if (args[0] === npm && args[1] === 'install') {
-      installing = true;
-      mkdirSync(join(packageDir, 'dist/bundle'), { recursive: true });
-      mkdirSync(join(prefix, 'bin'), { recursive: true });
-      writeFileSync(cli, 'broken');
-      symlinkSync(commandTarget, command);
-      return { status: 0 };
-    }
-    if (args.includes('--version')) {
-      return installing
-        ? { status: 1, stderr: 'broken install' }
-        : { status: 0, stdout: '1.2.0' };
-    }
-    return { status: 1 };
-  };
-
-  assert.throws(() => updateLatest({
-    env: {},
-    home,
-    node,
-    run,
-    find: () => command,
-  }), /无法运行/);
-  assert.equal(readFileSync(cli, 'utf8'), "console.log('1.2.0');\n");
-  assert.equal(readlinkSync(command), commandTarget);
-  assert.equal(existsSync(join(prefix, 'lib/node_modules/.package-lock.json')), false);
+test('stage failures leave the existing installation untouched', async t => {
+  const cases = [
+    ['npm exits non-zero after writing the stage', {
+      install: args => {
+        writeInstall(stageOf(args), 'half written');
+        return { status: 1, stderr: 'npm failed after changing files' };
+      },
+    }, /npm failed after changing files/],
+    ['the staged Pi cannot run', {
+      install: args => writeInstall(stageOf(args), 'broken'),
+    }, /无法运行/],
+    ['npm latest is a prerelease', {
+      latest: '1.5.0-beta.1',
+    }, /不是当前插件支持的稳定版本/],
+  ];
+  for (const [name, options, error] of cases) {
+    await t.test(name, t => {
+      const fixture = packageFixture(t);
+      const m = npmMachine(options);
+      assert.throws(() => updateLatest({
+        env: {}, home: fixture.root, node, run: m.run, find: () => fixture.command,
+      }), error);
+      assert.equal(m.installs.length, 1);
+      assert.equal(readFileSync(fixture.cli, 'utf8'), '1.2.0\n');
+      assert.equal(readlinkSync(fixture.command), fixture.commandTarget);
+      assert.deepEqual(leftovers(fixture.prefix), []);
+    });
+  }
 });
 
-test('a prerelease npm latest is rejected and the supported runtime is restored', t => {
-  const fixture = packageFixture(t, '1.4.0');
-  const run = (_command, args) => {
-    if (args[0] === npm && args[1] === 'view') return { status: 0, stdout: JSON.stringify('1.5.0-beta.1') };
-    if (args[0] === npm && args[1] === 'install') {
-      fixture.writePackageVersion('1.5.0-beta.1');
-      return { status: 0 };
-    }
-    if (args.includes('--version')) {
-      const version = readFileSync(fixture.cli, 'utf8').trim();
-      return { status: 0, stdout: version };
-    }
-    return { status: 1 };
-  };
-
-  assert.throws(() => updateLatest({
-    env: {},
-    home: fixture.root,
-    node,
-    run,
-    find: () => fixture.command,
-    realpath: fixture.realpath,
-  }), /不是当前插件支持的稳定版本/);
-  assert.equal(readFileSync(fixture.cli, 'utf8'), '1.4.0\n');
-  assert.equal(readlinkSync(fixture.command), fixture.commandTarget);
-  assert.deepEqual(readdirSync(fixture.prefix).filter(name => name.startsWith(backupName)), []);
-  assert.equal(existsSync(join(fixture.prefix, '.coda-pi-update.lock')), false);
-});
-
-test('npm can exit non-zero after modifying the prefix and still restore every backed-up path', t => {
+test('a committed install that fails verification is rolled back', t => {
   const fixture = packageFixture(t);
-  const npmLock = join(fixture.prefix, 'lib/node_modules/.package-lock.json');
-  writeFileSync(npmLock, 'old lock\n');
-  const run = (_command, args) => {
-    if (args[0] === npm && args[1] === 'view') return { status: 0, stdout: JSON.stringify('1.4.0') };
-    if (args[0] === npm && args[1] === 'install') {
-      fixture.writePackageVersion('modified before failure');
-      rmSync(fixture.command, { force: true });
-      writeFileSync(fixture.command, 'modified command\n');
-      writeFileSync(npmLock, 'modified lock\n');
-      return { status: 1, stderr: 'npm failed after changing files' };
-    }
-    if (args.includes('--version')) return { status: 0, stdout: '1.2.0' };
-    return { status: 1 };
-  };
+  // The staged Pi runs; once moved into place the same version no longer starts.
+  const m = npmMachine({
+    version: command => command === fixture.command && readFileSync(fixture.cli, 'utf8') === '1.4.0\n'
+      ? { status: 1, stderr: 'broken after move' }
+      : null,
+  });
 
   assert.throws(() => updateLatest({
-    env: {},
-    home: fixture.root,
-    node,
-    run,
-    find: () => fixture.command,
-    realpath: fixture.realpath,
-  }), /npm failed after changing files/);
+    env: {}, home: fixture.root, node, run: m.run, find: () => fixture.command,
+  }), /无法运行/);
   assert.equal(readFileSync(fixture.cli, 'utf8'), '1.2.0\n');
   assert.equal(readlinkSync(fixture.command), fixture.commandTarget);
-  assert.equal(readFileSync(npmLock, 'utf8'), 'old lock\n');
+  assert.deepEqual(leftovers(fixture.prefix), []);
+});
+
+test('a failed rollback is reported as RollbackError and keeps the backup', t => {
+  const fixture = packageFixture(t);
+  const scope = dirname(fixture.packageDir);
+  const m = npmMachine({
+    version: command => {
+      if (command !== fixture.command || readFileSync(fixture.cli, 'utf8') !== '1.4.0\n') return null;
+      // Verification of the committed install fails, and the package location can no longer be restored.
+      rmSync(scope, { recursive: true, force: true });
+      writeFileSync(scope, 'not a directory\n');
+      return { status: 1, stderr: 'broken after move' };
+    },
+  });
+
+  assert.throws(() => updateLatest({
+    env: {}, home: fixture.root, node, run: m.run, find: () => fixture.command,
+  }), error => error instanceof RollbackError && /恢复原 Pi 安装失败/.test(error.message));
+  const backups = leftovers(fixture.prefix).filter(name => name.startsWith(backupName));
+  assert.equal(backups.length, 1);
+  assert.equal(readFileSync(join(fixture.prefix, backups[0], 'package/dist/bundle/cli.js'), 'utf8'), '1.2.0\n');
 });
 
 test('interrupted backups are restored even when the transaction misses the completed rename', t => {
@@ -488,9 +493,7 @@ test('a recorded external npm prefix is recovered after its command was moved aw
     command: { moved: true },
   });
   writeFileSync(join(backupRoot, 'transaction.json'), JSON.stringify(transaction));
-  const lock = join(fixture.prefix, '.coda-pi-update.lock');
-  mkdirSync(lock);
-  writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 999_999_999 }));
+  holdLock(fixture.prefix);
   mkdirSync(transactionDir, { recursive: true });
   const record = transactionRecordPath(stateDir, fixture.prefix);
   writeFileSync(record, JSON.stringify({
@@ -503,12 +506,11 @@ test('a recorded external npm prefix is recovered after its command was moved aw
   assert.equal(recoverPendingInstallation({ env }), true);
   assert.equal(readFileSync(fixture.cli, 'utf8'), '1.2.0\n');
   assert.equal(readlinkSync(fixture.command), fixture.commandTarget);
-  assert.equal(existsSync(backupRoot), false);
-  assert.equal(existsSync(lock), false);
+  assert.deepEqual(leftovers(fixture.prefix), []);
   assert.equal(existsSync(record), false);
 });
 
-test('a failed recovery retains the backup and a blocking update lock', t => {
+test('a failed recovery keeps the backup and stops the update with RollbackError', t => {
   const root = mkdtempSync(join(tmpdir(), 'pi-recovery-failure-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const prefix = join(root, 'prefix');
@@ -528,9 +530,7 @@ test('a failed recovery retains the backup and a blocking update lock', t => {
     }],
   };
   writeFileSync(join(backupRoot, 'transaction.json'), `${JSON.stringify(transaction, null, 2)}\n`);
-  const lock = join(prefix, '.coda-pi-update.lock');
-  mkdirSync(lock);
-  writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 999_999_999 }));
+  holdLock(prefix);
 
   const external = join(root, 'external-pi');
   const m = runFor({ installedVersion: '1.2.0' });
@@ -541,37 +541,66 @@ test('a failed recovery retains the backup and a blocking update lock', t => {
     run: m.run,
     find: () => external,
     realpath: () => join(prefix, 'lib/node_modules', PACKAGE, 'dist/bundle/cli.js'),
-  }), /未完成备份保留/);
+  }), error => error instanceof RollbackError && /未完成备份保留/.test(error.message));
   assert.equal(existsSync(join(backupRoot, 'package')), true);
-  assert.equal(existsSync(lock), true);
+  assert.equal(m.ran.some(args => args[2] === 'install'), false);
 });
 
 test('an active update lock prevents a concurrent npm install', t => {
   const fixture = packageFixture(t);
-  const lock = join(fixture.prefix, '.coda-pi-update.lock');
-  mkdirSync(lock);
-  writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: process.pid }));
-  const m = runFor({ installedVersion: '1.2.0' });
+  holdLock(fixture.prefix, process.pid);
+  const m = npmMachine();
 
   assert.throws(() => updateLatest({
-    env: {},
-    home: fixture.root,
-    node,
-    run: m.run,
-    find: () => fixture.command,
-    realpath: fixture.realpath,
+    env: {}, home: fixture.root, node, run: m.run, find: () => fixture.command,
   }), /另一个 Pi 更新正在进行/);
-  assert.equal(m.ran.some(args => args[2] === 'install'), false);
+  assert.equal(m.installs.length, 0);
 });
 
-test('setup recovery removes a stale lock even when no backup remains', t => {
+test('setup recovery removes a stale lock and leftovers of dead updaters', t => {
   const fixture = packageFixture(t);
-  const lock = join(fixture.prefix, '.coda-pi-update.lock');
-  mkdirSync(lock);
-  writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 999_999_999 }));
+  holdLock(fixture.prefix);
+  const stage = mkdtempSync(join(fixture.prefix, '.coda-pi-stage-'));
+  writeInstall(stage, '1.4.0');
+  const deadDraft = mkdtempSync(`${lockPath(fixture.prefix)}.new-${deadPid}-`);
+  const liveDraft = mkdtempSync(`${lockPath(fixture.prefix)}.new-${process.pid}-`);
 
   assert.equal(recoverIdleInstallation(fixture.prefix), true);
-  assert.equal(existsSync(lock), false);
+  assert.deepEqual(leftovers(fixture.prefix), [liveDraft.slice(fixture.prefix.length + 1)]);
+  assert.equal(existsSync(deadDraft), false);
+  // An npm process orphaned by a killed setup may still write its stage; the install is not affected.
+  writeInstall(stage, '1.4.0');
+  assert.equal(readFileSync(fixture.cli, 'utf8'), '1.2.0\n');
+});
+
+test('reclaiming a stale lock cannot take a lock another process acquired meanwhile', t => {
+  const fixture = packageFixture(t);
+  const stale = holdLock(fixture.prefix);
+  let other = null;
+  // Between reading the stale owner and replacing it, another process reclaims the same lock.
+  const alive = pid => {
+    if (pid === deadPid && !other) {
+      other = acquireUpdateLock(fixture.prefix, { alive: candidate => candidate === process.pid });
+      return false;
+    }
+    return pid === process.pid;
+  };
+
+  assert.throws(() => acquireUpdateLock(fixture.prefix, { alive }), /另一个 Pi 更新正在进行/);
+  const [owner] = lockOwners(fixture.prefix);
+  assert.notEqual(owner, stale);
+  assert.match(owner, new RegExp(`^owner-${process.pid}-`));
+  other();
+  assert.equal(existsSync(lockPath(fixture.prefix)), false);
+});
+
+test('a lock that does not hold exactly one owner is not taken over', t => {
+  const fixture = packageFixture(t);
+  mkdirSync(lockPath(fixture.prefix));
+  writeFileSync(join(lockPath(fixture.prefix), 'owner.json'), '{}');
+
+  assert.throws(() => acquireUpdateLock(fixture.prefix), /锁内容无法识别/);
+  assert.equal(existsSync(join(lockPath(fixture.prefix), 'owner.json')), true);
 });
 
 test('setup recovery serializes a leftover transaction record before deleting it', t => {
@@ -594,10 +623,7 @@ test('setup recovery serializes a leftover transaction record before deleting it
 test('setup recovery leaves an active update lock, owner and record intact', t => {
   const fixture = packageFixture(t);
   const stateDir = join(fixture.root, 'state');
-  const lock = join(fixture.prefix, '.coda-pi-update.lock');
-  const owner = JSON.stringify({ pid: process.pid, token: 'active-update' });
-  mkdirSync(lock);
-  writeFileSync(join(lock, 'owner.json'), owner);
+  const owner = holdLock(fixture.prefix, process.pid);
   const record = transactionRecordPath(stateDir, fixture.prefix);
   mkdirSync(join(stateDir, 'pi-runtime-transactions'), { recursive: true });
   const recordContents = JSON.stringify({
@@ -613,7 +639,7 @@ test('setup recovery leaves an active update lock, owner and record intact', t =
     }),
     /另一个 Pi 更新正在进行/,
   );
-  assert.equal(readFileSync(join(lock, 'owner.json'), 'utf8'), owner);
+  assert.deepEqual(lockOwners(fixture.prefix), [owner]);
   assert.equal(readFileSync(record, 'utf8'), recordContents);
 });
 
@@ -626,21 +652,14 @@ test('updateLatest upgrades the npm installation behind a recognized shell wrapp
     `exec ${fixture.command} "$@"`,
     '',
   ].join('\n'));
-  const realpath = path => path === wrapper ? wrapper : fixture.realpath(path);
-  const m = runFor({ installedVersion: '1.2.0', afterInstallVersion: '1.4.0' });
-  const run = (command, args, options) => {
-    const value = m.run(command, args, options);
-    if (command === node && args[1] === 'install') fixture.writePackageVersion('1.4.0');
-    return value;
-  };
+  const m = npmMachine({ aliases: { [wrapper]: fixture.command } });
 
   const result = updateLatest({
     env: {},
     home: fixture.root,
     node,
-    run,
+    run: m.run,
     find: () => wrapper,
-    realpath,
   });
   assert.equal(result.version, '1.4.0');
   assert.equal(result.path, wrapper);

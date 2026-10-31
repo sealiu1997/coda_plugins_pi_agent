@@ -12,6 +12,7 @@ import {
   VERIFIED_PI_VERSION,
   resolvePiLaunch,
 } from '../agent/pi-command.mjs';
+import { RollbackError } from '../agent/pi-runtime.mjs';
 import { setup } from '../agent/setup.mjs';
 
 const home = '/home/me';
@@ -132,7 +133,7 @@ test('setup cleans a stale committed backup even when follow-latest is off', asy
     phase: 'committed',
     states: [],
   }));
-  await writeFile(join(lock, 'owner.json'), JSON.stringify({ pid: 999_999_999 }));
+  await writeFile(join(lock, 'owner-999999999-0f0f'), '');
   const m = machine({
     versions: { [runtimeCommand]: () => ({ status: 0, stdout: '1.4.0\n' }) },
     realpath: path => path === runtimeCommand ? runtimeActual : path,
@@ -263,6 +264,32 @@ test('an update failure preserves an existing supported Pi', () => {
   assert.equal(setup({ env, home, ...m.options, find: () => external }), 0);
   assert.equal(m.updates.length, 1);
   assert.match(m.said.at(-1), /继续使用已有的 Pi 1\.4\.0.*npm registry unavailable/);
+});
+
+test('a failed rollback fails setup even though the Pi seen before the update was supported', () => {
+  const external = '/opt/homebrew/bin/pi';
+  const m = machine({
+    versions: { [external]: () => ({ status: 0, stdout: '1.4.0\n' }) },
+    updateResult: new RollbackError('安装完成，但 /opt/homebrew/bin/pi 无法运行；恢复原 Pi 安装失败：EIO'),
+    realpath: () => '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
+  });
+  const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.updateLatest': true }) };
+  assert.equal(setup({ env, home, ...m.options, find: () => external }), 1);
+  assert.match(m.said.at(-1), /^! 更新 Pi 失败：.*恢复原 Pi 安装失败/);
+});
+
+test('an update failure keeps the existing Pi only if it still runs afterwards', () => {
+  const external = '/opt/homebrew/bin/pi';
+  let probes = 0;
+  const m = machine({
+    versions: { [external]: () => (++probes === 1 ? { status: 0, stdout: '1.4.0\n' } : { status: 1 }) },
+    updateResult: new Error('npm registry unavailable'),
+    realpath: () => '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
+  });
+  const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.updateLatest': true }) };
+  assert.equal(setup({ env, home, ...m.options, find: () => external }), 1);
+  assert.equal(probes, 2);
+  assert.match(m.said.at(-1), /^! 更新 Pi 失败：npm registry unavailable/);
 });
 
 test('legacy managed installs are reused, upgraded, or reported when migration fails', () => {

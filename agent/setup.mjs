@@ -11,6 +11,7 @@ import {
   versionOf,
 } from './pi-command.mjs';
 import {
+  RollbackError,
   recoverIdleInstallation,
   recoverPendingInstallation,
   runtimeOwner,
@@ -96,8 +97,12 @@ export function setup({
       }
       return 0;
     } catch (error) {
-      if (version && supportedVersion(version)) {
-        say(`更新 Pi 失败，继续使用已有的 Pi ${version}（${launch}）：${error.message}`);
+      // Probe again: the snapshot taken before the update says nothing about what is installed now.
+      const current = !(error instanceof RollbackError) && version
+        ? versionOf(launch, { env, node, run })
+        : null;
+      if (current && supportedVersion(current)) {
+        say(`更新 Pi 失败，继续使用已有的 Pi ${current}（${launch}）：${error.message}`);
         return 0;
       }
       fail(`${owner.kind === 'none' ? '安装' : '更新'} Pi 失败：${error.message}`);

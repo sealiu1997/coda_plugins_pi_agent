@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   closeSync,
   existsSync,
@@ -210,10 +210,10 @@ export function inspectRuntime({
 const packageInstallationPaths = prefix => ({
   package: join(prefix, 'lib', 'node_modules', PACKAGE),
   command: join(prefix, 'bin', 'pi'),
-  lock: join(prefix, 'lib', 'node_modules', '.package-lock.json'),
 });
 const updateLock = prefix => join(prefix, '.coda-pi-update.lock');
 const backupPrefix = '.coda-pi-backup-';
+const stagePrefix = '.coda-pi-stage-';
 const transactionStateDir = env => env.CODA_PLUGIN_STATE
   ? join(env.CODA_PLUGIN_STATE, 'pi-runtime-transactions')
   : null;
@@ -227,6 +227,10 @@ const pathExists = path => {
     throw error;
   }
 };
+
+// A failed rollback leaves the previous Pi in an unknown state; setup must fail instead of
+// assuming the version it saw before the update is still installed.
+export class RollbackError extends Error {}
 
 const writeFileAtomic = (target, contents) => {
   const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
@@ -390,82 +394,99 @@ export function recoverInterruptedInstallation(prefix) {
   return true;
 }
 
-function acquireUpdateLock(prefix, { env = process.env } = {}) {
+// The lock is a directory holding exactly one `owner-<pid>-<token>` entry. It is created with
+// its owner already inside, and a dead owner is replaced by renaming that exact entry. Two
+// processes reclaiming the same stale lock cannot both win, and a process that read an old
+// owner cannot take the lock someone else has since acquired.
+const lockOwner = name => {
+  const match = /^owner-(\d+)-[0-9a-f-]+$/.exec(name);
+  return match ? { pid: Number(match[1]), name } : null;
+};
+
+function readLockOwner(lock) {
+  let names;
+  try {
+    names = readdirSync(lock);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+  const owners = names.map(lockOwner).filter(Boolean);
+  if (owners.length !== 1) {
+    throw new Error(`Pi 更新锁内容无法识别，确认没有更新在进行后请删除：${lock}`);
+  }
+  return owners[0];
+}
+
+// Only the lock holder runs here, so stages and backups belong to dead updaters. Lock drafts
+// may belong to a live process that is about to try the lock, so only dead ones are removed.
+function removeLeftovers(prefix, lock, alive) {
+  const lockName = lock.slice(prefix.length + 1);
+  for (const name of readdirSync(prefix)) {
+    const draft = name.startsWith(`${lockName}.new-`) && /^\d+/.exec(name.slice(lockName.length + 5));
+    if (name.startsWith(stagePrefix)
+      || name.startsWith(`${lockName}.released-`)
+      || (draft && !alive(Number(draft[0])))) {
+      rmSync(join(prefix, name), { recursive: true, force: true });
+    }
+  }
+}
+
+export function acquireUpdateLock(prefix, { env = process.env, alive = processIsAlive } = {}) {
   mkdirSync(prefix, { recursive: true });
   const lock = updateLock(prefix);
-  const owner = {
-    pid: process.pid,
-    startedAt: new Date().toISOString(),
-    token: `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-  };
-  const createLock = () => {
-    mkdirSync(lock);
-    writeFileSync(join(lock, 'owner.json'), JSON.stringify(owner));
-  };
-  const staleLocks = [];
+  const mine = `owner-${process.pid}-${randomUUID()}`;
   let acquired = false;
-  for (let attempt = 0; attempt < 3 && !acquired; attempt++) {
+  for (let attempt = 0; attempt < 5 && !acquired; attempt++) {
+    const draft = mkdtempSync(`${lock}.new-${process.pid}-`);
     try {
-      createLock();
+      writeFileSync(join(draft, mine), '');
+      renameSync(draft, lock);
+      acquired = true;
+      continue;
+    } catch (error) {
+      rmSync(draft, { recursive: true, force: true });
+      if (error.code !== 'EEXIST' && error.code !== 'ENOTEMPTY') throw error;
+    }
+    const owner = readLockOwner(lock);
+    if (!owner) continue;
+    if (alive(owner.pid)) throw new Error(`另一个 Pi 更新正在进行（PID ${owner.pid}）：${lock}`);
+    try {
+      renameSync(join(lock, owner.name), join(lock, mine));
       acquired = true;
     } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      let existing = null;
-      try {
-        existing = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'));
-      } catch {}
-      if (processIsAlive(existing?.pid)) {
-        throw new Error(`另一个 Pi 更新正在进行（PID ${existing.pid}）：${lock}`);
-      }
-      // Avoid taking a lock another process has created but has not populated yet.
-      if (!existing) {
-        try {
-          if (Date.now() - lstatSync(lock).mtimeMs < 10_000) {
-            throw new Error(`另一个 Pi 更新正在初始化：${lock}`);
-          }
-        } catch (statError) {
-          if (statError.message.startsWith('另一个 Pi 更新')) throw statError;
-        }
-      }
-      const stale = `${lock}.stale-${owner.pid}-${owner.token}-${attempt}`;
-      try {
-        renameSync(lock, stale);
-        staleLocks.push(stale);
-      } catch (renameError) {
-        if (renameError.code !== 'ENOENT') throw renameError;
-      }
+      if (error.code !== 'ENOENT') throw error;
     }
   }
   if (!acquired) throw new Error(`无法取得 Pi 更新锁：${lock}`);
-  for (const stale of staleLocks) {
-    try { rmSync(stale, { recursive: true, force: true }); } catch {}
-  }
+  const release = () => {
+    if (!pathExists(join(lock, mine))) return;
+    const released = `${lock}.released-${process.pid}-${randomUUID()}`;
+    renameSync(lock, released);
+    rmSync(released, { recursive: true, force: true });
+  };
   try {
+    removeLeftovers(prefix, lock, alive);
     recoverInterruptedInstallation(prefix);
     forgetTransaction(env, prefix);
-  } catch (recoveryError) {
-    // Keep both the backup and lock. A failed restore must be inspectable and must block a new
-    // npm install from overwriting the remaining recovery evidence.
-    throw new Error(`${recoveryError.message}；未完成备份保留在 ${prefix}`);
+  } catch (error) {
+    release();
+    // The backup stays in the prefix for the next attempt or for inspection.
+    throw new RollbackError(`${error.message}；未完成备份保留在 ${prefix}`, { cause: error });
   }
-  return () => {
-    let current = null;
-    try {
-      current = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'));
-    } catch {}
-    if (current?.token === owner.token) rmSync(lock, { recursive: true, force: true });
-  };
+  return release;
 }
+
+const hasLeftovers = prefix => pathExists(prefix) && readdirSync(prefix).some(name => (
+  name.startsWith(backupPrefix) || name.startsWith(stagePrefix) || name.startsWith('.coda-pi-update.lock')
+));
 
 // Setup uses this to clean an interrupted transaction without creating lock files on every
 // ordinary launch. If another process is still updating, its live pid lock is reported instead.
 export function recoverIdleInstallation(prefix, { env = process.env } = {}) {
-  const hasBackups = (interruptedBackups(prefix)?.length ?? 0) > 0;
   const record = transactionRecord(env, prefix);
-  const hasRecord = record && pathExists(record);
-  if (!hasBackups && !pathExists(updateLock(prefix)) && !hasRecord) return false;
-  const releaseLock = acquireUpdateLock(prefix, { env });
-  releaseLock();
+  if (!hasLeftovers(prefix) && !(record && pathExists(record))) return false;
+  acquireUpdateLock(prefix, { env })();
   return true;
 }
 
@@ -477,31 +498,30 @@ export function recoverPendingInstallation({ env = process.env } = {}) {
   return recovered;
 }
 
-// npm can return non-zero after changing a global prefix, and a syntactically successful install
-// can still leave an unusable entrypoint. Keep the previous package, command and npm lockfile in
-// the same filesystem and restore them when installation or verification fails.
-function backupInstallation(prefix, { env = process.env } = {}) {
-  const releaseLock = acquireUpdateLock(prefix, { env });
-  let backupRoot;
-  let transaction;
+const rollBack = (error, restore) => {
   try {
-    backupRoot = mkdtempSync(join(prefix, backupPrefix));
-    const paths = packageInstallationPaths(prefix);
-    transaction = {
-      schemaVersion: 1,
-      phase: 'backup',
-      states: Object.entries(paths).map(([name, path]) => ({
-        name,
-        path,
-        existed: pathExists(path),
-        moved: false,
-        restored: false,
-      })),
-    };
-  } catch (error) {
-    releaseLock();
-    throw error;
+    restore();
+  } catch (restoreError) {
+    throw new RollbackError(`${error.message}；恢复原 Pi 安装失败：${restoreError.message}`, { cause: error });
   }
+  throw error;
+};
+
+// Move the current package and command aside before the verified stage replaces them. The
+// manifest lets the next lock holder restore them if this process dies before committing.
+function backupInstallation(prefix, { env = process.env } = {}) {
+  const backupRoot = mkdtempSync(join(prefix, backupPrefix));
+  const transaction = {
+    schemaVersion: 1,
+    phase: 'backup',
+    states: Object.entries(packageInstallationPaths(prefix)).map(([name, path]) => ({
+      name,
+      path,
+      existed: pathExists(path),
+      moved: false,
+      restored: false,
+    })),
+  };
   const restore = () => {
     try {
       transaction.phase = 'rollback';
@@ -512,7 +532,6 @@ function backupInstallation(prefix, { env = process.env } = {}) {
     }
     cleanupFinishedBackup(backupRoot);
     forgetTransaction(env, prefix);
-    releaseLock();
   };
 
   try {
@@ -527,12 +546,7 @@ function backupInstallation(prefix, { env = process.env } = {}) {
     transaction.phase = 'install';
     writeTransaction(backupRoot, transaction);
   } catch (error) {
-    try {
-      restore();
-    } catch (restoreError) {
-      throw new Error(`${error.message}；恢复原 Pi 安装失败：${restoreError.message}`);
-    }
-    throw error;
+    rollBack(error, restore);
   }
 
   return {
@@ -545,11 +559,64 @@ function backupInstallation(prefix, { env = process.env } = {}) {
         forgetTransaction(env, prefix);
       } catch {
         // The new installation has already run and passed verification. Keep the committed
-        // backup for the next setup run to clean instead of turning success into a rollback.
+        // backup for the next lock holder to clean instead of turning success into a rollback.
       }
-      try { releaseLock(); } catch {}
     },
   };
+}
+
+const checkInstalled = (version, path, latest) => {
+  if (!version) throw new Error(`安装完成，但 ${path} 无法运行`);
+  const comparison = compareVersions(version, latest);
+  if (comparison === null || comparison < 0) {
+    throw new Error(`安装完成，但 Pi ${version} 仍低于 npm latest ${latest}`);
+  }
+  if (!supportedVersion(version)) {
+    throw new Error(`安装完成，但 Pi ${version} 不是当前插件支持的稳定版本`);
+  }
+  return version;
+};
+
+// npm writes only into a fresh stage beside the real installation. If setup dies while npm keeps
+// running, that orphan can only touch the stage. The real package and command change by renames
+// in this process, after the staged Pi has run.
+function installStaged({ prefix, latest, verificationPath, env, node, run }) {
+  const stage = mkdtempSync(join(prefix, stagePrefix));
+  try {
+    const result = run(node, [
+      npmCli(node), 'install', '--global', '--prefix', stage, '--ignore-scripts',
+      '--no-fund', '--no-audit', '--no-update-notifier', `${PACKAGE}@${latest}`,
+    ], {
+      encoding: 'utf8',
+      timeout: 8 * 60_000,
+      env: withNode(env, node),
+    });
+    if (result.status !== 0) {
+      throw new Error(`安装 Pi 失败：${result.error?.message || result.stderr?.trim() || `npm 退出码 ${result.status ?? result.signal}`}`);
+    }
+    const staged = packageInstallationPaths(stage);
+    checkInstalled(versionOf(staged.command, { env, node, run }), staged.command, latest);
+
+    const target = packageInstallationPaths(prefix);
+    const installation = backupInstallation(prefix, { env });
+    try {
+      mkdirSync(dirname(target.package), { recursive: true });
+      mkdirSync(dirname(target.command), { recursive: true });
+      renameSync(staged.package, target.package);
+      renameSync(staged.command, target.command);
+      const version = checkInstalled(versionOf(verificationPath, { env, node, run }), verificationPath, latest);
+      installation.commit();
+      return version;
+    } catch (error) {
+      rollBack(error, installation.restore);
+    }
+  } finally {
+    try {
+      rmSync(stage, { recursive: true, force: true });
+    } catch {
+      // The next lock holder removes leftover stages.
+    }
+  }
 }
 
 export function updateLatest({
@@ -559,7 +626,6 @@ export function updateLatest({
   run = spawnSync,
   realpath = realpathSync,
   find = findPi,
-  backup = backupInstallation,
 } = {}) {
   const before = inspectRuntime({ env, home, node, run, realpath, find, checkLatest: false });
   const prefix = before.owner.kind === 'none' || before.owner.kind === 'managed'
@@ -583,38 +649,12 @@ export function updateLatest({
   const verificationPath = before.owner.kind === 'none' || before.owner.kind === 'managed'
     ? managedPi(env, home)
     : before.path;
-  const installation = backup(prefix, { env });
+  const release = acquireUpdateLock(prefix, { env });
   let version;
   try {
-    const result = run(node, [
-      npmCli(node), 'install', '--global', '--prefix', prefix, '--ignore-scripts',
-      '--no-fund', '--no-audit', '--no-update-notifier', `${PACKAGE}@${latest}`,
-    ], {
-      encoding: 'utf8',
-      timeout: 8 * 60_000,
-      env: withNode(env, node),
-    });
-    if (result.status !== 0) {
-      throw new Error(`安装 Pi 失败：${result.error?.message || result.stderr?.trim() || `npm 退出码 ${result.status ?? result.signal}`}`);
-    }
-
-    version = versionOf(verificationPath, { env, node, run });
-    if (!version) throw new Error(`安装完成，但 ${verificationPath} 无法运行`);
-    const afterComparison = compareVersions(version, latest);
-    if (afterComparison === null || afterComparison < 0) {
-      throw new Error(`安装完成，但 Pi ${version} 仍低于 npm latest ${latest}`);
-    }
-    if (!supportedVersion(version)) {
-      throw new Error(`安装完成，但 Pi ${version} 不是当前插件支持的稳定版本`);
-    }
-    installation.commit();
-  } catch (error) {
-    try {
-      installation.restore();
-    } catch (restoreError) {
-      throw new Error(`${error.message}；恢复原 Pi 安装失败：${restoreError.message}`);
-    }
-    throw error;
+    version = installStaged({ prefix, latest, verificationPath, env, node, run });
+  } finally {
+    release();
   }
   return {
     path: verificationPath,
