@@ -714,7 +714,9 @@ function toolLayouts(t) {
   symlinkSync(`../install/global/node_modules/${PACKAGE}/dist/bundle/cli.js`, join(bunRoot, 'bin/pi'));
 
   const pnpmHome = join(root, 'pnpm');
-  const pnpmTarget = cli(join(pnpmHome, 'global/v11/14c9f-1a1903cc0b1/node_modules'));
+  const pnpmGroup = join(pnpmHome, 'global/v11/14c9f-1a1903cc0b1');
+  const pnpmTarget = cli(join(pnpmGroup, 'node_modules'));
+  writeFileSync(join(pnpmGroup, 'package.json'), JSON.stringify({ dependencies: { [PACKAGE]: '1.2.0' } }));
   mkdirSync(join(pnpmHome, 'bin'));
   writeFileSync(join(pnpmHome, 'bin/pi'), [
     '#!/bin/sh',
@@ -727,7 +729,7 @@ function toolLayouts(t) {
     `# cmd-shim-target=${pnpmTarget}`,
     '',
   ].join('\n'), { mode: 0o755 });
-  return { root, brewPrefix, bunRoot, pnpmHome };
+  return { root, brewPrefix, bunRoot, pnpmHome, pnpmGroup };
 }
 
 test('Homebrew formula, Bun and pnpm installs are recognized from where they resolve', t => {
@@ -827,4 +829,41 @@ test('tool updates refuse a prerelease and fail when the tool or the result does
 
   assert.throws(update(toolMachine({ status: 1 })), error => !(error instanceof RollbackError) && /Bun 全局安装.*更新 Pi 失败：tool failed/.test(error.message));
   assert.throws(update(toolMachine({ after: '1.2.0' })), /Pi 1\.2\.0 仍低于 npm latest 1\.4\.0/);
+});
+
+test('a pnpm 11 install group is re-added whole, keeping its other tools at their installed versions', t => {
+  const layout = toolLayouts(t);
+  writeFileSync(join(layout.pnpmGroup, 'package.json'), JSON.stringify({
+    dependencies: { [PACKAGE]: '1.2.0', semver: '^7.6.0', local: 'file:/tools/local' },
+  }));
+  mkdirSync(join(layout.pnpmGroup, 'node_modules/semver'), { recursive: true });
+  writeFileSync(join(layout.pnpmGroup, 'node_modules/semver/package.json'), JSON.stringify({ version: '7.8.5' }));
+  const command = join(layout.pnpmHome, 'bin/pi');
+  const update = m => updateLatest({ env: {}, home: layout.root, node, run: m.run, find: () => command });
+
+  const m = toolMachine({});
+  assert.equal(update(m).version, '1.4.0');
+  assert.equal(m.updates()[0].args.at(-1), `${PACKAGE}@1.4.0,semver@7.8.5,local@file:/tools/local`);
+
+  writeFileSync(join(layout.pnpmGroup, 'package.json'), JSON.stringify({
+    dependencies: { [PACKAGE]: '1.2.0', odd: 'file:/a,b' },
+  }));
+  const comma = toolMachine({});
+  assert.throws(() => update(comma), /odd@file:\/a,b 含逗号，无法与 Pi 一起重装，未更新/);
+  assert.equal(comma.updates().length, 0);
+});
+
+test('a pre-11 shared pnpm global directory updates Pi alone', t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'pi-pnpm10-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'global/5/node_modules', PACKAGE, 'dist/bundle'), { recursive: true });
+  writeFileSync(join(root, 'global/5/node_modules', PACKAGE, 'dist/bundle/cli.js'), '1.2.0\n');
+  writeFileSync(join(root, 'global/5/package.json'), JSON.stringify({ dependencies: { [PACKAGE]: '1.2.0', other: '1.0.0' } }));
+  writeFileSync(join(root, 'pi'), `#!/bin/sh\nbasedir=$(dirname "$0")\nexec node  "$basedir/global/5/node_modules/${PACKAGE}/dist/bundle/cli.js" "$@"\n`, { mode: 0o755 });
+  const owner = runtimeOwner(join(root, 'pi'), { env: {}, home: root });
+  assert.equal(owner.kind, 'pnpm');
+  assert.equal(owner.group, undefined);
+  const m = toolMachine({});
+  updateLatest({ env: {}, home: root, node, run: m.run, find: () => join(root, 'pi') });
+  assert.equal(m.updates()[0].args.at(-1), `${PACKAGE}@1.4.0`);
 });

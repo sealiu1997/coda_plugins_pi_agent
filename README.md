@@ -110,7 +110,7 @@ node scripts/check-pi-compat.mjs --accept
   - npm 全局安装（含 Homebrew 的 Node、nvm、fnm、asdf 下的）与插件安装到 `~/.local` 的：在原 npm prefix 中升级到 npm latest（见下面的 stage 与事务）。
   - Homebrew 软件包 `pi-coding-agent`：运行 `brew upgrade pi-coding-agent`，升级到 Homebrew 提供的版本（可能晚于 npm latest；按 Homebrew 的规则，过旧的依赖如 `node` 会一起升级）。
   - Bun 全局安装：在它的 `BUN_INSTALL` 中运行 `bun add --global @earendil-works/pi-coding-agent@<latest>`。
-  - pnpm 全局安装：在它的 `PNPM_HOME` 中运行 `pnpm add --global --config.ignore-scripts=true @earendil-works/pi-coding-agent@<latest>`。
+  - pnpm 全局安装：在它的 `PNPM_HOME` 中运行 `pnpm add --global --config.ignore-scripts=true @earendil-works/pi-coding-agent@<latest>`。pnpm 11 添加一个包会替换包含它的整个安装组，所以 Pi 与其他工具同组（`pnpm add -g a,b`）时，其他成员按已安装的版本（`file:`、git 等按原写法）一起重装，不会被删掉。
   - Homebrew、Bun、pnpm 的安装由它们自己替换，插件不搬动它们管理的文件，也就没有插件自己的回滚：目标版本不是插件支持的稳定版时不更新，更新后重新验证实际启动的 Pi。
 - registry 暂时不可达或更新失败时，已有且达到最低版本的 Pi 会继续可用；缺少可用 Pi 时准备环境才失败。
 - npm 只安装到同一 prefix 下的临时 stage，暂存的 Pi 能运行、不低于 npm latest、不是预发布版之后，才由准备环境进程把旧 package 与命令入口移到备份、换入新版本，并再次验证；失败时恢复旧安装。准备环境中途被终止时，仍在运行的 npm 只能写 stage，不会改动正式安装。

@@ -191,7 +191,11 @@ function toolOwner(command, { realpath, readFile }) {
     } catch {
       return null;
     }
-    return { kind: 'pnpm', home: shim.slice(0, shim.indexOf('/global/')), actual: shim };
+    const pnpmHome = shim.slice(0, shim.indexOf('/global/'));
+    // pnpm 11 keeps each install group in global/v11/<hash>; earlier versions share global/<n>.
+    const installDir = shim.slice(0, shim.indexOf(PACKAGE_PATH));
+    const grouped = installDir.slice(pnpmHome.length + '/global/'.length).split('/').length === 2;
+    return { kind: 'pnpm', home: pnpmHome, actual: shim, ...(grouped ? { group: installDir } : {}) };
   }
   return null;
 }
@@ -703,6 +707,26 @@ export function homebrewLatest(owner, { env = process.env, run = spawnSync, time
   return version;
 }
 
+// pnpm 11 replaces every install group that contains a package it adds, so Pi alone would take
+// the group's other tools with it. Re-add the whole group: Pi at `spec`, the others as installed.
+function pnpmGroupSpec(owner, spec) {
+  if (!owner.group) return spec;
+  const manifest = JSON.parse(readFileSync(join(owner.group, 'package.json'), 'utf8'));
+  const members = [spec];
+  for (const [alias, wanted] of Object.entries(manifest.dependencies ?? {})) {
+    if (alias === PACKAGE) continue;
+    // A registry range is pinned to what is installed; file:, git, npm: and other specs stay as written.
+    const registry = typeof wanted === 'string' && !wanted.includes(':') && !/^[./~]/.test(wanted);
+    const version = registry
+      ? JSON.parse(readFileSync(join(owner.group, 'node_modules', alias, 'package.json'), 'utf8')).version
+      : wanted;
+    const member = `${alias}@${version}`;
+    if (member.includes(',')) throw new Error(`pnpm 安装组里的 ${member} 含逗号，无法与 Pi 一起重装，未更新`);
+    members.push(member);
+  }
+  return members.join(',');
+}
+
 // The command that makes the tool which installed Pi put `latest` in place.
 function toolCommand(owner, latest, { env, node }) {
   const spec = `${PACKAGE}@${latest}`;
@@ -723,7 +747,7 @@ function toolCommand(owner, latest, { env, node }) {
     case 'pnpm':
       return {
         command: firstExisting([join(owner.home, 'pnpm'), join(owner.home, 'bin', 'pnpm')], 'pnpm'),
-        args: ['add', '--global', '--config.ignore-scripts=true', spec],
+        args: ['add', '--global', '--config.ignore-scripts=true', pnpmGroupSpec(owner, spec)],
         env: { ...env, PNPM_HOME: owner.home, PATH: path([join(owner.home, 'bin'), owner.home]) },
       };
   }
