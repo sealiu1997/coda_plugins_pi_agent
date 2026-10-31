@@ -147,6 +147,62 @@ export function wrapperTarget(command, {
   return wrapperTarget(target, { realpath, readFile, depth: depth + 1, seen }) ?? target;
 }
 
+const PACKAGE_PATH = `/node_modules/${PACKAGE}/`;
+const HOMEBREW_FORMULA = 'pi-coding-agent';
+
+// The Pi a pnpm global bin shim starts, read from the shim without running it: pnpm 11 records it
+// as `# cmd-shim-target=`, earlier versions only as a path below `$basedir`.
+export function pnpmShimTarget(shim, { readFile = readFileSync } = {}) {
+  let source;
+  try {
+    source = readFile(shim, 'utf8');
+  } catch {
+    return null;
+  }
+  if (typeof source !== 'string' || source.length > 64 * 1024 || !source.startsWith('#!/bin/sh')) return null;
+  const recorded = /^# cmd-shim-target=(\/.+)$/m.exec(source)?.[1];
+  const relative = /"\$basedir\/((?:\.\.\/)?global\/[^"]+)"/.exec(source)?.[1];
+  const target = recorded ?? (relative ? join(dirname(shim), relative) : null);
+  if (!target) return null;
+  const path = normalize(target).replaceAll('\\', '/');
+  return path.includes('/global/') && path.includes(PACKAGE_PATH) ? path : null;
+}
+
+// Homebrew's formula, Bun and pnpm keep Pi in their own layouts and update it with their own
+// commands. Each is recognized from where the command resolves, never by running it.
+function toolOwner(command, { realpath, readFile }) {
+  let actual;
+  try {
+    actual = normalize(realpath(command)).replaceAll('\\', '/');
+  } catch {
+    return null;
+  }
+  const keg = actual.indexOf(`/Cellar/${HOMEBREW_FORMULA}/`);
+  if (keg > 0) {
+    const prefix = actual.slice(0, keg);
+    return { kind: 'homebrew', prefix, brew: join(prefix, 'bin', 'brew'), formula: HOMEBREW_FORMULA, actual };
+  }
+  const bun = actual.indexOf(`/install/global${PACKAGE_PATH}`);
+  if (bun > 0) return { kind: 'bun', root: actual.slice(0, bun), actual };
+  const shim = pnpmShimTarget(actual, { readFile });
+  if (shim) {
+    try {
+      realpath(shim);
+    } catch {
+      return null;
+    }
+    const pnpmHome = shim.slice(0, shim.indexOf('/global/'));
+    // pnpm 11 keeps each install group in global/v11/<hash>; earlier versions share global/<n>.
+    const installDir = shim.slice(0, shim.indexOf(PACKAGE_PATH));
+    const grouped = installDir.slice(pnpmHome.length + '/global/'.length).split('/').length === 2;
+    return { kind: 'pnpm', home: pnpmHome, actual: shim, ...(grouped ? { group: installDir } : {}) };
+  }
+  return null;
+}
+
+// Owners whose installation this plugin can update, by npm or by the tool that installed it.
+export const UPDATABLE = new Set(['none', 'managed', 'npm', 'homebrew', 'bun', 'pnpm']);
+
 // A custom executable at ~/.local/bin is external unless its symlink resolves into the npm
 // package this plugin installed. That protects user scripts while still recognizing npm.
 export function runtimeOwner(path, {
@@ -157,6 +213,8 @@ export function runtimeOwner(path, {
 } = {}) {
   if (!path || path === 'pi') return { kind: 'none' };
   const ownerPath = wrapperTarget(path, { realpath, readFile }) ?? path;
+  const tool = toolOwner(ownerPath, { realpath, readFile });
+  if (tool) return tool;
   const npm = npmOwner(ownerPath, { realpath });
   if (!npm) return { kind: 'external' };
   const prefix = normalize(managedPrefix(env, home)).replaceAll('\\', '/');
@@ -165,6 +223,17 @@ export function runtimeOwner(path, {
     actualPrefix = normalize(realpath(prefix)).replaceAll('\\', '/');
   } catch {}
   return npm.prefix === actualPrefix ? { ...npm, kind: 'managed' } : npm;
+}
+
+// Where an update of this owner goes, for setup's progress line.
+export function updateTarget(owner, { env = process.env, home = homedir() } = {}) {
+  switch (owner.kind) {
+    case 'npm': return owner.prefix;
+    case 'homebrew': return `Homebrew（brew upgrade ${owner.formula}）`;
+    case 'bun': return `Bun 全局安装（${owner.root}）`;
+    case 'pnpm': return `pnpm 全局安装（${owner.home}）`;
+    default: return managedPi(env, home);
+  }
 }
 
 export function inspectRuntime({
@@ -201,7 +270,7 @@ export function inspectRuntime({
     latestError,
     owner,
     updateAvailable: comparison !== null && comparison < 0,
-    canUpdate: owner.kind === 'none' || owner.kind === 'managed' || owner.kind === 'npm',
+    canUpdate: UPDATABLE.has(owner.kind),
   };
 }
 
@@ -617,6 +686,111 @@ function installStaged({ prefix, latest, verificationPath, env, node, run }) {
   }
 }
 
+const TOOLS = new Set(['homebrew', 'bun', 'pnpm']);
+const firstExisting = (paths, fallback) => paths.find(path => existsSync(path)) ?? fallback;
+
+// The version Homebrew would upgrade the formula to.
+export function homebrewLatest(owner, { env = process.env, run = spawnSync, timeout = 60_000 } = {}) {
+  const result = run(owner.brew, ['info', '--json=v2', owner.formula], {
+    encoding: 'utf8',
+    timeout,
+    env: { ...env, HOMEBREW_NO_ENV_HINTS: '1' },
+  });
+  if (result.status !== 0) {
+    throw new Error(result.error?.message || result.stderr?.trim() || `brew info 退出码 ${result.status ?? result.signal}`);
+  }
+  let version;
+  try {
+    version = JSON.parse(result.stdout).formulae?.[0]?.versions?.stable;
+  } catch {}
+  if (!version) throw new Error(`brew info 没有给出 ${owner.formula} 的版本`);
+  return version;
+}
+
+// pnpm 11 replaces every install group that contains a package it adds, so Pi alone would take
+// the group's other tools with it. Re-add the whole group: Pi at `spec`, the others as installed.
+function pnpmGroupSpec(owner, spec) {
+  if (!owner.group) return spec;
+  const manifest = JSON.parse(readFileSync(join(owner.group, 'package.json'), 'utf8'));
+  const members = [spec];
+  for (const [alias, wanted] of Object.entries(manifest.dependencies ?? {})) {
+    if (alias === PACKAGE) continue;
+    // A registry range is pinned to what is installed; file:, git, npm: and other specs stay as written.
+    const registry = typeof wanted === 'string' && !wanted.includes(':') && !/^[./~]/.test(wanted);
+    const version = registry
+      ? JSON.parse(readFileSync(join(owner.group, 'node_modules', alias, 'package.json'), 'utf8')).version
+      : wanted;
+    const member = `${alias}@${version}`;
+    if (member.includes(',')) throw new Error(`pnpm 安装组里的 ${member} 含逗号，无法与 Pi 一起重装，未更新`);
+    members.push(member);
+  }
+  return members.join(',');
+}
+
+// The command that makes the tool which installed Pi put `latest` in place.
+function toolCommand(owner, latest, { env, node }) {
+  const spec = `${PACKAGE}@${latest}`;
+  const path = directories => [...directories, dirname(node), env.PATH].filter(Boolean).join(delimiter);
+  switch (owner.kind) {
+    case 'homebrew':
+      return {
+        command: owner.brew,
+        args: ['upgrade', owner.formula],
+        env: { ...env, HOMEBREW_NO_ENV_HINTS: '1' },
+      };
+    case 'bun':
+      return {
+        command: firstExisting([join(owner.root, 'bin', 'bun')], 'bun'),
+        args: ['add', '--global', spec],
+        env: { ...env, BUN_INSTALL: owner.root, PATH: path([join(owner.root, 'bin')]) },
+      };
+    case 'pnpm':
+      return {
+        command: firstExisting([join(owner.home, 'pnpm'), join(owner.home, 'bin', 'pnpm')], 'pnpm'),
+        // pnpm's own build policy applies, so builds the user approved for the group's other
+        // tools (allowBuilds) run again as they did when the group was installed.
+        args: ['add', '--global', pnpmGroupSpec(owner, spec)],
+        env: { ...env, PNPM_HOME: owner.home, PATH: path([join(owner.home, 'bin'), owner.home]) },
+      };
+  }
+  throw new Error(`不支持的安装方式：${owner.kind}`);
+}
+
+// Homebrew, Bun and pnpm replace their own installation and keep it consistent with their
+// records, so Pi is updated through them rather than by moving files they own.
+function updateWithTool(before, { env, home, node, run, realpath }) {
+  const { owner } = before;
+  const label = updateTarget(owner, { env, home });
+  const latest = owner.kind === 'homebrew'
+    ? homebrewLatest(owner, { env, run })
+    : latestVersion({ env, node, run });
+  const comparison = compareVersions(before.version, latest);
+  if (comparison !== null && comparison >= 0) {
+    return { ...before, latest, changed: false, installed: false };
+  }
+  // There is no rollback for another tool's installation: refuse a target this plugin cannot run.
+  if (!supportedVersion(latest)) {
+    throw new Error(`${label} 的最新版 ${latest} 不是当前插件支持的稳定版本，未更新`);
+  }
+  const { command, args, env: toolEnv } = toolCommand(owner, latest, { env, node });
+  const result = run(command, args, { encoding: 'utf8', timeout: 8 * 60_000, env: toolEnv });
+  if (result.status !== 0) {
+    throw new Error(`${label} 更新 Pi 失败：${result.error?.message || result.stderr?.trim() || `退出码 ${result.status ?? result.signal}`}`);
+  }
+  const version = checkInstalled(versionOf(before.path, { env, node, run }), before.path, latest);
+  return {
+    path: before.path,
+    version,
+    latest,
+    latestError: null,
+    owner: runtimeOwner(before.path, { env, home, realpath }),
+    updateAvailable: false,
+    canUpdate: true,
+    installed: false,
+    changed: before.version !== version,
+  };
+}
+
 export function updateLatest({
   env = process.env,
   home = homedir(),
@@ -626,12 +800,13 @@ export function updateLatest({
   find = findPi,
 } = {}) {
   const before = inspectRuntime({ env, home, node, run, realpath, find, checkLatest: false });
+  if (TOOLS.has(before.owner.kind)) return updateWithTool(before, { env, home, node, run, realpath });
   const prefix = before.owner.kind === 'none' || before.owner.kind === 'managed'
     ? managedPrefix(env, home)
     : before.owner.kind === 'npm' ? before.owner.prefix : null;
   if (!prefix) {
     const suffix = before.path ? `：${before.path}` : '';
-    throw new Error(`Pi 来自无法自动升级的安装方式${suffix}。请用原来的安装工具升级，或在 pi.commandPath 中改为 npm 安装的 Pi`);
+    throw new Error(`Pi 来自无法自动升级的安装方式${suffix}。请用原来的安装工具升级，或在 pi.commandPath 中改为 npm、Homebrew、Bun 或 pnpm 安装的 Pi`);
   }
   const latest = latestVersion({ env, node, run });
   const comparison = compareVersions(before.version, latest);

@@ -5,17 +5,18 @@ import { pathToFileURL } from 'node:url';
 import {
   MIN_PI_VERSION,
   findPi,
-  managedPi,
   managedPrefix,
   supportedVersion,
   versionOf,
 } from './pi-command.mjs';
 import {
   RollbackError,
+  UPDATABLE,
   recoverIdleInstallation,
   recoverPendingInstallation,
   runtimeOwner,
   updateLatest,
+  updateTarget,
 } from './pi-runtime.mjs';
 
 export { versionOf };
@@ -30,7 +31,8 @@ const parseSettings = value => {
 
 // 0 once a supported Pi runs on this machine; 1 with the reason as the last line. Coda runs
 // this after install, update and plugin-settings changes. Existing Pi installations are taken
-// over first. A missing Pi is installed into ~/.local; opt-in latest mode updates npm installs.
+// over first. A missing Pi is installed into ~/.local; opt-in latest mode updates npm installs in
+// place and Homebrew, Bun or pnpm installs through those tools.
 export function setup({
   env = process.env,
   home = homedir(),
@@ -71,7 +73,7 @@ export function setup({
     }
   }
   const version = launch === 'pi' ? null : versionOf(launch, { env, node, run });
-  const installable = owner.kind === 'none' || owner.kind === 'managed' || owner.kind === 'npm';
+  const installable = UPDATABLE.has(owner.kind);
 
   const install = ({ updateRequested }) => {
     if (explicitlyConfigured && !version) {
@@ -79,10 +81,10 @@ export function setup({
       return 1;
     }
     if (!installable) {
-      fail(`Pi ${version ?? '版本未知'}（${launch}）来自无法自动升级的安装方式。请用原来的安装工具升级，或在 pi.commandPath 中改为 npm 安装的 Pi。`);
+      fail(`Pi ${version ?? '版本未知'}（${launch}）来自无法自动升级的安装方式。请用原来的安装工具升级，或在 pi.commandPath 中改为 npm、Homebrew、Bun 或 pnpm 安装的 Pi。`);
       return 1;
     }
-    const target = owner.kind === 'npm' ? owner.prefix : managedPi(env, home);
+    const target = updateTarget(owner, { env, home });
     say(`${owner.kind === 'none' ? '安装' : '更新'} Pi latest 到 ${target}`);
     try {
       const installed = update({ env, home, node, run, find, realpath });

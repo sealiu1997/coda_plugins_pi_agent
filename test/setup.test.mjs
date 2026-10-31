@@ -235,6 +235,32 @@ test('follow-latest reports an already-current npm Pi without pretending to rein
   assert.equal(m.said.at(-1), `Pi 1.4.0 已是最新版本：${external}`);
 });
 
+test('follow-latest updates a Homebrew formula through brew and reports where it went', () => {
+  const external = '/opt/homebrew/bin/pi';
+  const m = machine({
+    versions: { [external]: () => ({ status: 0, stdout: '1.2.0\n' }) },
+    updateResult: { version: '1.4.0', path: external },
+    realpath: path => path === external ? '/opt/homebrew/Cellar/pi-coding-agent/1.2.0/bin/pi' : path,
+  });
+  const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.updateLatest': true }) };
+  assert.equal(setup({ env, home, ...m.options, find: () => external }), 0);
+  assert.equal(m.updates.length, 1);
+  assert.deepEqual(m.said, [
+    '更新 Pi latest 到 Homebrew（brew upgrade pi-coding-agent）',
+    `已更新到 Pi 1.4.0：${external}`,
+  ]);
+});
+
+test('pnpm 11 and environment-configured Bun and pnpm homes are searched', () => {
+  const find = (env, path) => findPi({}, { env, home, usable: candidate => candidate === path });
+  for (const path of [join(home, 'Library/pnpm/bin/pi'), join(home, '.local/share/pnpm/bin/pi')]) {
+    assert.equal(find({}, path), path);
+  }
+  assert.equal(find({ PNPM_HOME: '/pnpm-home' }, '/pnpm-home/bin/pi'), '/pnpm-home/bin/pi');
+  assert.equal(find({ PNPM_HOME: '/pnpm-home' }, '/pnpm-home/pi'), '/pnpm-home/pi');
+  assert.equal(find({ BUN_INSTALL: '/bun-home' }, '/bun-home/bin/pi'), '/bun-home/bin/pi');
+});
+
 test('custom installers are taken over but never overwritten or falsely reported as updatable', () => {
   const current = machine({ versions: { '/custom/pi': () => ({ status: 0, stdout: '1.4.0\n' }) } });
   assert.equal(setup({ env: {}, home, ...current.options, find: () => '/custom/pi' }), 0);
@@ -379,7 +405,7 @@ test('manifest and minimum-version metadata agree with the managed local runtime
   const root = join(import.meta.dirname, '..');
   const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
   const lock = JSON.parse(await readFile(join(root, 'package-lock.json'), 'utf8'));
-  assert.equal(manifest.version, '0.5.0');
+  assert.equal(manifest.version, '0.5.1');
   assert.equal(manifest.dependencies[PACKAGE], undefined);
   assert.equal(manifest.devDependencies[PACKAGE], VERIFIED_PI_VERSION);
   assert.equal(lock.packages[''].devDependencies[PACKAGE], VERIFIED_PI_VERSION);
