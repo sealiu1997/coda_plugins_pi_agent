@@ -124,6 +124,8 @@ export function findPi(settings = {}, {
     join(home, '.local', 'share', 'pnpm', 'pi'),
     ...versionDirectories(join(home, '.nvm', 'versions', 'node'), ['bin'], read),
     ...versionDirectories(join(home, '.local', 'share', 'fnm', 'node-versions'), ['installation', 'bin'], read),
+    // fnm's macOS data directory when XDG_DATA_HOME is not set.
+    ...versionDirectories(join(home, 'Library', 'Application Support', 'fnm', 'node-versions'), ['installation', 'bin'], read),
     ...versionDirectories(join(home, '.asdf', 'installs', 'nodejs'), ['bin'], read),
     own,
     ...(legacy ? [legacy] : []),

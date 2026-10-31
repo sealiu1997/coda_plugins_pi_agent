@@ -84,6 +84,13 @@ test('Pi lookup also finds nvm, fnm and asdf installs when Coda did not inherit 
   assert.ok(requested.includes(fnm));
 });
 
+test('Pi lookup finds an fnm install in its macOS data directory', () => {
+  const fnm = join(home, 'Library/Application Support/fnm/node-versions');
+  const read = path => path === fnm ? [{ name: 'v24.1.0', isDirectory: () => true }] : [];
+  const fnmPi = join(fnm, 'v24.1.0/installation/bin/pi');
+  assert.equal(findPi({}, { env: {}, home, read, usable: path => path === fnmPi }), fnmPi);
+});
+
 test('automatic launch resolution is the machine Pi rather than a plugin-private package', () => {
   assert.equal(resolvePiLaunch({}, {
     env: { PATH: '/usr/local/bin' },
