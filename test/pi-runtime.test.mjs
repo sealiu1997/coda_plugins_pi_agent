@@ -813,7 +813,10 @@ test('updateLatest adds the exact npm latest with Bun or pnpm in their own homes
   assert.equal(updateLatest({ env: { PATH: '/usr/bin' }, home: layout.root, node, run: pnpm.run, find: () => pnpmCommand }).version, '1.4.0');
   const [pnpmUpdate] = pnpm.updates();
   assert.deepEqual([pnpmUpdate.command, ...pnpmUpdate.args],
-    [join(layout.pnpmHome, 'pnpm'), 'add', '--global', '--config.ignore-scripts=true', `${PACKAGE}@1.4.0`]);
+    [join(layout.pnpmHome, 'pnpm'), 'add', '--global', `${PACKAGE}@1.4.0`]);
+  // The group's builds follow the user's pnpm policy (allowBuilds); nothing here overrides it.
+  assert.ok(!pnpmUpdate.args.some(arg => arg.includes('ignore-scripts')));
+  assert.equal(pnpmUpdate.env.npm_config_ignore_scripts, undefined);
   assert.equal(pnpmUpdate.env.PNPM_HOME, layout.pnpmHome);
   assert.ok(pnpmUpdate.env.PATH.startsWith(`${join(layout.pnpmHome, 'bin')}:${layout.pnpmHome}:`));
 });

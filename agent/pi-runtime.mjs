@@ -747,7 +747,9 @@ function toolCommand(owner, latest, { env, node }) {
     case 'pnpm':
       return {
         command: firstExisting([join(owner.home, 'pnpm'), join(owner.home, 'bin', 'pnpm')], 'pnpm'),
-        args: ['add', '--global', '--config.ignore-scripts=true', pnpmGroupSpec(owner, spec)],
+        // pnpm's own build policy applies, so builds the user approved for the group's other
+        // tools (allowBuilds) run again as they did when the group was installed.
+        args: ['add', '--global', pnpmGroupSpec(owner, spec)],
         env: { ...env, PNPM_HOME: owner.home, PATH: path([join(owner.home, 'bin'), owner.home]) },
       };
   }
