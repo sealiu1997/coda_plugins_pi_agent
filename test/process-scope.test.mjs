@@ -17,14 +17,35 @@ async function until(fn, description) {
 }
 const alive=pid=>{try{process.kill(pid,0);return true;}catch{return false;}};
 
-test('timed-out command reaps a TERM-resistant descendant in its process group', async t => {
-  const dir=temporary(t), scope=new ProcessScope(), pid=join(dir,'pid'), term=join(dir,'term');
-  const script=`const {spawn}=require('node:child_process'); spawn(process.execPath,['-e',${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(pid)},String(process.pid)); process.on('SIGTERM',()=>require('node:fs').writeFileSync(${JSON.stringify(term)},'TERM')); setInterval(()=>{},1000);`)}],{stdio:'inherit'});`;
-  await assert.rejects(scope.run(process.execPath,['-e',script],{env:minimalEnv(dir),timeout:400}),/超时/);
-  assert.ok(existsSync(term), 'TERM grace precedes KILL');
-  const descendant=Number(readFileSync(pid));
+// The descendant resists TERM and reports its pid only after its handler is in place, so stopping
+// is triggered once it is ready, however long Node takes to start.
+function termResistantTree(dir) {
+  const pid=join(dir,'pid'), term=join(dir,'term');
+  const descendant=`process.on('SIGTERM',()=>require('node:fs').writeFileSync(${JSON.stringify(term)},'TERM')); require('node:fs').writeFileSync(${JSON.stringify(pid)},String(process.pid)); setInterval(()=>{},1000);`;
+  return { pid, term, script:`const {spawn}=require('node:child_process'); spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'inherit'});` };
+}
+
+test('stopping a command TERMs its process group, then KILLs a TERM-resistant descendant', async t => {
+  const dir=temporary(t), scope=new ProcessScope(), tree=termResistantTree(dir);
+  t.after(()=>scope.cleanup());
+  const running=scope.run(process.execPath,['-e',tree.script],{env:minimalEnv(dir),timeout:60_000});
+  const stopped=assert.rejects(running,/测试停止/);
+  await until(()=>existsSync(tree.pid), `后代进程写出 ${tree.pid}`);
+  const descendant=Number(readFileSync(tree.pid));
+  scope.controller.abort(new Error('测试停止'));
+  await stopped;
+  assert.equal(readFileSync(tree.term,'utf8'), 'TERM', 'TERM grace precedes KILL');
   await until(()=>!alive(descendant), `Pi 后代进程 ${descendant} 退出`);
-  await scope.cleanup();
+  assert.equal(scope.children.size,0);
+});
+
+test('a timed-out command is rejected and its whole process group is reaped', async t => {
+  const dir=temporary(t), scope=new ProcessScope(), tree=termResistantTree(dir);
+  t.after(()=>scope.cleanup());
+  await assert.rejects(scope.run(process.execPath,['-e',tree.script],{env:minimalEnv(dir),timeout:100}),/超时/);
+  assert.equal(scope.children.size,0);
+  // Whether or not the descendant had started by then, none outlives the scope's KILL.
+  if (existsSync(tree.pid)) await until(()=>!alive(Number(readFileSync(tree.pid))), '后代进程退出');
 });
 
 for (const signal of ['SIGINT','SIGTERM']) test(`scanner ${signal} cleans up its version subprocess and isolated HOME`, async t => {
