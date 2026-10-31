@@ -1,0 +1,84 @@
+name: Publish
+# Publishes the package.json version to npm when it is not there yet. npm trusts this workflow
+# (Trusted Publisher, OIDC): there is no token, and the release carries provenance.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: publish
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      # No dependency cache in the release job: everything it publishes is built from this checkout.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Decide whether this version is new
+        id: decide
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          echo "spec=$name@$version" >> "$GITHUB_OUTPUT"
+          set +e
+          out=$(npm view "$name@$version" version 2>&1)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ] && [ "$out" = "$version" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "$name@$version 已在 npm 上，跳过发布。" >> "$GITHUB_STEP_SUMMARY"
+          elif { [ "$status" -eq 0 ] && [ -z "$out" ]; } || printf '%s' "$out" | grep -q 'E404'; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            # Only a definite "not found" counts as unpublished; any other registry answer stops here.
+            printf '%s\n' "$out"
+            exit 1
+          fi
+      - if: steps.decide.outputs.publish == 'true'
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - if: steps.decide.outputs.publish == 'true'
+        run: npm test
+      - if: steps.decide.outputs.publish == 'true'
+        run: npm run check:coda
+      - if: steps.decide.outputs.publish == 'true'
+        run: npm run check:fake-live
+      - if: steps.decide.outputs.publish == 'true'
+        run: npm run check:pi:verified
+      - if: steps.decide.outputs.publish == 'true'
+        run: git diff --exit-code
+      # Trusted publishing needs npm 11.5.1 or later.
+      - if: steps.decide.outputs.publish == 'true'
+        name: Check npm supports trusted publishing
+        run: |
+          node --input-type=module -e "
+            const [major, minor, patch] = '$(npm --version)'.split('.').map(Number);
+            if (major < 11 || (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))) {
+              console.error('npm ' + [major, minor, patch].join('.') + ' 不支持可信发布，需要 11.5.1 或更高');
+              process.exit(1);
+            }"
+      - if: steps.decide.outputs.publish == 'true'
+        run: npm publish --access public
+      - if: steps.decide.outputs.publish == 'true'
+        name: Confirm the release
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if [ "$(npm view "${{ steps.decide.outputs.spec }}" version 2>/dev/null)" != "" ]; then
+              echo "已发布 ${{ steps.decide.outputs.spec }}。" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "发布命令成功，但 2 分钟内 registry 还读不到 ${{ steps.decide.outputs.spec }}" >&2
+          exit 1

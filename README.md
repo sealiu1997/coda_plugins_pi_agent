@@ -16,7 +16,7 @@
 
 在「设置 › 插件」的商店里选「Pi」安装（npm 包 `@coda-console/pi`，商店里看不到时点「刷新」）；也可以在「从仓库添加…」里填本仓库 `sealiu1997/coda_plugins_pi_agent`。
 
-本插件在本仓库维护，不在 `coda-console/coda-plugins` 里；新版本由维护者手动发布到 npm 的 `@coda-console` 下。
+本插件在本仓库维护，不在 `coda-console/coda-plugins` 里；新版本由本仓库的 `Publish` workflow 发布到 npm 的 `@coda-console` 下（见[发布](#发布)）。
 
 在这台机器上试改请不要用仓库地址，填本机仓库的绝对路径：Coda 只读取已提交的内容，未提交的改动看不到。
 
@@ -118,3 +118,20 @@ node scripts/check-pi-compat.mjs --accept
 - 自定义脚本、独立下载或无法识别安装来源的 Pi：可以接管，但不会覆盖；要自动更新时请改用 npm、Homebrew、Bun 或 pnpm 安装并重新保存设置。
 
 Coda 官方 Claude SDK 和 Codex 插件把各自的 SDK/CLI 锁在插件依赖里，更新时在插件页检查和更新整个插件。Pi 插件按你的要求改成管理机器上的 Pi；Pi 插件本体的版本仍由 Coda 插件商店的「检查更新 / 更新」机制管理。更新 Pi 不会主动结束正在运行的会话，新启动的 Pi 进程使用更新后的版本。
+
+## 发布
+
+`.github/workflows/publish.yml` 在合入 main 或手动发起时运行：`package.json` 的版本已在 npm 上就跳过；只有 registry 明确回答没有这个版本（E404）才发布，查询出错就失败，不当作未发布。发布前跑与 CI 相同的测试、Coda 检查、fake live 与 Pi 1.4.0 扫描。
+
+它用 npm 的可信发布（Trusted Publisher，GitHub Actions OIDC）认证，不需要也不保存 npm token，发布的版本自动附带来源证明（provenance）。在 npmjs.com 的包设置 › Trusted Publisher 里登记一次：
+
+| 项目 | 值 |
+| --- | --- |
+| Publisher | GitHub Actions |
+| Organization or user | `sealiu1997` |
+| Repository | `coda_plugins_pi_agent` |
+| Workflow filename | `publish.yml` |
+| Environment | 留空 |
+
+所以发新版就是在 PR 里把 `package.json` 与 `package-lock.json` 的版本加一，合并后由这个 workflow 发布。
+
