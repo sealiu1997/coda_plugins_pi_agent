@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { existsSync, realpathSync } from 'node:fs';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -29,6 +30,7 @@ function machine({
   const ran = [];
   const said = [];
   const updates = [];
+  let updated = false;
   return {
     ran,
     said,
@@ -37,11 +39,13 @@ function machine({
       node,
       run: (command, args) => {
         ran.push([command, ...args]);
+        if (updated && command === updateResult.path) return { status: 0, stdout: `${updateResult.version}\n` };
         return versions[command]?.() ?? { status: null, error: new Error('ENOENT') };
       },
       update: options => {
         updates.push(options);
         if (updateResult instanceof Error) throw updateResult;
+        updated = true;
         return updateResult;
       },
       realpath,
@@ -92,7 +96,7 @@ test('the managed runtime is a normal npm prefix at ~/.local', () => {
   assert.equal(managedPrefix({}, home), join(home, '.local'));
   assert.equal(managedPrefix({ CODA_PI_PREFIX: '/managed' }, home), '/managed');
   assert.equal(managedPi({}, home), join(home, '.local/bin/pi'));
-  assert.equal(legacyManagedPi({ CODA_PLUGIN_STATE: state }), join(state, 'pi/node_modules/.bin/pi'));
+  assert.equal(legacyManagedPi({ CODA_PLUGIN_STATE: state }), join(state, 'pi/bin/pi'));
 });
 
 test('a pi file on PATH that cannot execute is skipped', async t => {
@@ -152,7 +156,7 @@ test('setup cleans a stale committed backup even when follow-latest is off', asy
 
 test('a missing Pi installs npm latest into ~/.local/bin', () => {
   const m = machine();
-  assert.equal(setup({ env: {}, home, ...m.options, find: () => 'pi' }), 0);
+  assert.equal(setup({ env: {}, home, ...m.options, find: () => m.updates.length ? own : 'pi' }), 0);
   assert.equal(m.updates.length, 1);
   assert.equal(m.said[0], `安装 Pi latest 到 ${own}`);
   assert.equal(m.said.at(-1), `已安装 Pi 1.4.0：${own}`);
@@ -202,11 +206,13 @@ test('follow-latest updates a recognized npm global install in its own prefix', 
   const external = '/opt/homebrew/bin/pi';
   const m = machine({
     versions: { [external]: () => ({ status: 0, stdout: '1.2.0\n' }) },
+    updateResult: { version: '1.4.0', path: external },
     realpath: () => '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
   });
   const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.updateLatest': true }) };
   assert.equal(setup({ env, home, ...m.options, find: () => external }), 0);
   assert.equal(m.updates.length, 1);
+  assert.equal(m.said.at(-1), `已更新到 Pi 1.4.0：${external}`);
 });
 
 test('follow-latest reports an already-current npm Pi without pretending to reinstall it', () => {
@@ -292,25 +298,74 @@ test('an update failure keeps the existing Pi only if it still runs afterwards',
   assert.match(m.said.at(-1), /^! 更新 Pi 失败：npm registry unavailable/);
 });
 
-test('legacy managed installs are reused, upgraded, or reported when migration fails', () => {
-  const legacy = legacyManagedPi({ CODA_PLUGIN_STATE: state });
-  const current = machine({ versions: { [legacy]: () => ({ status: 0, stdout: '1.4.0\n' }) } });
-  assert.equal(setup({ env: { CODA_PLUGIN_STATE: state }, home, ...current.options, find: () => legacy }), 0);
-  assert.equal(current.updates.length, 0);
-
-  const old = machine({
-    versions: { [legacy]: () => ({ status: 0, stdout: '1.0.9\n' }) },
+// The layout 0.3.x setup left: `npm install --global --prefix $CODA_PLUGIN_STATE/pi`.
+async function legacyInstall(t, version) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'pi-legacy-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const stateDir = join(root, 'state');
+  const prefix = join(stateDir, 'pi');
+  const bundle = join(prefix, 'lib/node_modules', PACKAGE, 'dist/bundle');
+  await mkdir(bundle, { recursive: true });
+  await writeFile(join(bundle, 'cli.js'), '#!/usr/bin/env node\n');
+  await chmod(join(bundle, 'cli.js'), 0o755);
+  await mkdir(join(prefix, 'bin'));
+  await symlink(`../lib/node_modules/${PACKAGE}/dist/bundle/cli.js`, join(prefix, 'bin/pi'));
+  const env = { CODA_PLUGIN_STATE: stateDir, PATH: '' };
+  const command = legacyManagedPi(env);
+  // Only this temporary tree exists, whatever Pi the test machine has of its own.
+  const find = (settings, options) => findPi(settings, {
+    ...options,
+    usable: path => path.startsWith(root) && existsSync(path),
   });
-  assert.equal(setup({ env: { CODA_PLUGIN_STATE: state }, home, ...old.options, find: () => legacy }), 0);
-  assert.equal(old.updates.length, 1);
+  const m = machine({
+    versions: { [command]: () => ({ status: 0, stdout: `${version}\n` }) },
+    updateResult: { version: '1.4.0', path: command },
+    realpath: realpathSync,
+  });
+  return { root, prefix, env, command, find, m };
+}
 
-  const failed = machine({
-    versions: { [legacy]: () => ({ status: 0, stdout: '1.0.9\n' }) },
+test('a Pi installed by the 0.3 plugin is found in its real npm prefix and kept', async t => {
+  const legacy = await legacyInstall(t, '1.2.0');
+  assert.equal(legacy.find({}, { env: legacy.env, home: legacy.root }), legacy.command);
+  assert.equal(setup({ env: legacy.env, home: legacy.root, ...legacy.m.options, find: legacy.find }), 0);
+  assert.equal(legacy.m.updates.length, 0);
+  assert.deepEqual(legacy.m.said, [`已有 Pi 1.2.0 可用：${legacy.command}`]);
+});
+
+test('a too-old 0.3 plugin copy is updated in its own prefix and verified where it starts', async t => {
+  const legacy = await legacyInstall(t, '1.0.9');
+  assert.equal(setup({ env: legacy.env, home: legacy.root, ...legacy.m.options, find: legacy.find }), 0);
+  assert.equal(legacy.m.updates.length, 1);
+  assert.equal(legacy.m.said[0], `更新 Pi latest 到 ${legacy.prefix}`);
+  assert.equal(legacy.m.said.at(-1), `已升级到兼容版本 Pi 1.4.0：${legacy.command}`);
+});
+
+test('an explicit 0.3 path is not reported ready when the update went elsewhere', async t => {
+  const legacy = await legacyInstall(t, '1.0.9');
+  const m = machine({
+    versions: { [legacy.command]: () => ({ status: 0, stdout: '1.0.9\n' }) },
+    updateResult: { version: '1.4.0', path: own },
+    realpath: realpathSync,
+  });
+  const env = {
+    ...legacy.env,
+    CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.commandPath': legacy.command, 'pi.updateLatest': true }),
+  };
+  assert.equal(setup({ env, home: legacy.root, ...m.options, find: legacy.find }), 1);
+  assert.equal(m.said[0], `更新 Pi latest 到 ${legacy.prefix}`);
+  assert.match(m.said.at(-1), new RegExp(`^! 装好了 Pi 1\\.4\\.0.*会启动的 ${legacy.command} 是 1\\.0\\.9`));
+});
+
+test('a failed update of a too-old 0.3 copy fails setup', async t => {
+  const legacy = await legacyInstall(t, '1.0.9');
+  const m = machine({
+    versions: { [legacy.command]: () => ({ status: 0, stdout: '1.0.9\n' }) },
     updateResult: new Error('migration failed'),
+    realpath: realpathSync,
   });
-  assert.equal(setup({ env: { CODA_PLUGIN_STATE: state }, home, ...failed.options, find: () => legacy }), 1);
-  assert.equal(failed.updates.length, 1);
-  assert.match(failed.said.at(-1), /更新 Pi 失败：migration failed/);
+  assert.equal(setup({ env: legacy.env, home: legacy.root, ...m.options, find: legacy.find }), 1);
+  assert.match(m.said.at(-1), /更新 Pi 失败：migration failed/);
 });
 
 test('manifest and minimum-version metadata agree with the managed local runtime', async () => {

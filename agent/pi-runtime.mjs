@@ -21,7 +21,6 @@ import { delimiter, dirname, join, normalize } from 'node:path';
 import {
   PACKAGE,
   findPi,
-  legacyManagedPi,
   managedPi,
   managedPrefix,
   parsePiVersion,
@@ -157,7 +156,6 @@ export function runtimeOwner(path, {
   readFile = readFileSync,
 } = {}) {
   if (!path || path === 'pi') return { kind: 'none' };
-  if (path === legacyManagedPi(env)) return { kind: 'managed' };
   const ownerPath = wrapperTarget(path, { realpath, readFile }) ?? path;
   const npm = npmOwner(ownerPath, { realpath });
   if (!npm) return { kind: 'external' };
@@ -646,9 +644,8 @@ export function updateLatest({
       prefix,
     };
   }
-  const verificationPath = before.owner.kind === 'none' || before.owner.kind === 'managed'
-    ? managedPi(env, home)
-    : before.path;
+  // Verify the command that was found, so a wrapper or symlink that will be launched is what passes.
+  const verificationPath = before.path ?? managedPi(env, home);
   const release = acquireUpdateLock(prefix, { env });
   let version;
   try {

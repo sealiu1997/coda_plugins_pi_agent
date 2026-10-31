@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, normalize } from 'node:path';
-import { managedPi, managedPrefix, PACKAGE, versionOf } from '../agent/pi-command.mjs';
+import { legacyManagedPi, managedPi, managedPrefix, PACKAGE, versionOf } from '../agent/pi-command.mjs';
 import {
   RollbackError,
   acquireUpdateLock,
@@ -347,6 +347,23 @@ test('npm writes only the stage; the existing npm install changes after the stag
   assert.equal(readFileSync(fixture.cli, 'utf8'), '1.4.0\n');
   assert.equal(readlinkSync(fixture.command), fixture.commandTarget);
   assert.deepEqual(leftovers(fixture.prefix), []);
+});
+
+test('a Pi installed by the 0.3 plugin is updated in its own prefix under plugin state', t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'pi-legacy-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const env = { CODA_PLUGIN_STATE: join(root, 'state') };
+  const prefix = join(root, 'state/pi');
+  writeInstall(prefix, '1.0.9');
+  const command = legacyManagedPi(env);
+  assert.equal(command, join(prefix, 'bin/pi'));
+  assert.deepEqual(runtimeOwner(command, { env, home: root }).prefix, prefix);
+
+  const result = updateLatest({ env, home: root, node, run: npmMachine().run, find: () => command });
+  assert.equal(result.path, command);
+  assert.equal(result.prefix, prefix);
+  assert.equal(readFileSync(command, 'utf8'), '1.4.0\n');
+  assert.equal(existsSync(managedPrefix(env, root)), false);
 });
 
 test('updateLatest skips npm when the installed Pi is already latest', () => {

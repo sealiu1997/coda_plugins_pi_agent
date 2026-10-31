@@ -86,14 +86,17 @@ export function setup({
     say(`${owner.kind === 'none' ? '安装' : '更新'} Pi latest 到 ${target}`);
     try {
       const installed = update({ env, home, node, run, find, realpath });
-      if (!installed.version || !supportedVersion(installed.version)) {
-        fail(`装好了，但 ${installed.path ?? target} 运行不了或低于最低版本 ${MIN_PI_VERSION}`);
+      // Ready means the Pi the Agent will start, found by the same rules, is the one just checked.
+      const started = find(settings, { env, home });
+      const startedVersion = started === 'pi' ? null : versionOf(started, { env, node, run });
+      if (!startedVersion || !supportedVersion(startedVersion) || startedVersion !== installed.version) {
+        fail(`装好了 Pi ${installed.version ?? '版本未知'}（${installed.path ?? target}），但 Agent 会启动的 ${started} 是 ${startedVersion ?? '无法运行'}，最低需要 ${MIN_PI_VERSION}。请检查 pi.commandPath。`);
         return 1;
       }
       if (installed.changed === false) {
-        say(`Pi ${installed.version} 已是最新版本：${installed.path ?? target}`);
+        say(`Pi ${startedVersion} 已是最新版本：${started}`);
       } else {
-        say(`${owner.kind === 'none' ? '已安装' : updateRequested ? '已更新到' : '已升级到兼容版本'} Pi ${installed.version}：${installed.path ?? target}`);
+        say(`${owner.kind === 'none' ? '已安装' : updateRequested ? '已更新到' : '已升级到兼容版本'} Pi ${startedVersion}：${started}`);
       }
       return 0;
     } catch (error) {

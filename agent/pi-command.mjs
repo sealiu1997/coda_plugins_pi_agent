@@ -67,9 +67,10 @@ export function envForPiCommand(env, piCommand, node = process.execPath) {
 export const managedPrefix = (env = process.env, home = homedir()) => env.CODA_PI_PREFIX || join(home, '.local');
 export const managedPi = (env = process.env, home = homedir()) => join(managedPrefix(env, home), 'bin', 'pi');
 
-// Versions before 0.4 installed under plugin state. Keep finding that copy during migration.
+// Versions before 0.4 ran `npm install --global --prefix $CODA_PLUGIN_STATE/pi`. Keep finding that
+// copy; it is an ordinary npm prefix, so it is verified and updated where it is.
 export const legacyManagedPi = (env = process.env) => env.CODA_PLUGIN_STATE
-  ? join(env.CODA_PLUGIN_STATE, 'pi', 'node_modules', '.bin', 'pi')
+  ? join(env.CODA_PLUGIN_STATE, 'pi', 'bin', 'pi')
   : null;
 
 const isExecutableFile = path => {
