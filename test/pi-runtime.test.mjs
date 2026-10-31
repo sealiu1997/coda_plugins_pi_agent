@@ -25,6 +25,7 @@ import {
   latestVersion,
   npmCli,
   npmOwner,
+  pnpmShimTarget,
   recoverIdleInstallation,
   recoverInterruptedInstallation,
   recoverPendingInstallation,
@@ -686,4 +687,144 @@ test('updateLatest upgrades the npm installation behind a recognized shell wrapp
 
 test('recovery is a no-op when the npm prefix does not exist', () => {
   assert.equal(recoverInterruptedInstallation('/path/that/does/not/exist'), false);
+});
+
+// The layouts Homebrew's formula, Bun and pnpm leave, as observed with those tools.
+function toolLayouts(t) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'pi-tools-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const cli = base => {
+    const bundle = join(base, PACKAGE, 'dist/bundle');
+    mkdirSync(bundle, { recursive: true });
+    writeFileSync(join(bundle, 'cli.js'), '1.2.0\n');
+    return join(bundle, 'cli.js');
+  };
+
+  const brewPrefix = join(root, 'homebrew');
+  const keg = join(brewPrefix, 'Cellar/pi-coding-agent/1.2.0');
+  cli(join(keg, 'libexec/lib/node_modules'));
+  mkdirSync(join(keg, 'bin'), { recursive: true });
+  writeFileSync(join(keg, 'bin/pi'), `#!/bin/bash\nPI_SKIP_VERSION_CHECK="1" exec "${keg}/libexec/bin/pi" "$@"\n`);
+  mkdirSync(join(brewPrefix, 'bin'));
+  symlinkSync('../Cellar/pi-coding-agent/1.2.0/bin/pi', join(brewPrefix, 'bin/pi'));
+
+  const bunRoot = join(root, 'bun');
+  cli(join(bunRoot, 'install/global/node_modules'));
+  mkdirSync(join(bunRoot, 'bin'));
+  symlinkSync(`../install/global/node_modules/${PACKAGE}/dist/bundle/cli.js`, join(bunRoot, 'bin/pi'));
+
+  const pnpmHome = join(root, 'pnpm');
+  const pnpmTarget = cli(join(pnpmHome, 'global/v11/14c9f-1a1903cc0b1/node_modules'));
+  mkdirSync(join(pnpmHome, 'bin'));
+  writeFileSync(join(pnpmHome, 'bin/pi'), [
+    '#!/bin/sh',
+    'basedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")',
+    'if [ -x "$basedir/node" ]; then',
+    `  exec "$basedir/node"  "$basedir/../global/v11/14c9f-1a1903cc0b1/node_modules/${PACKAGE}/dist/bundle/cli.js" "$@"`,
+    'else',
+    `  exec node  "$basedir/../global/v11/14c9f-1a1903cc0b1/node_modules/${PACKAGE}/dist/bundle/cli.js" "$@"`,
+    'fi',
+    `# cmd-shim-target=${pnpmTarget}`,
+    '',
+  ].join('\n'), { mode: 0o755 });
+  return { root, brewPrefix, bunRoot, pnpmHome };
+}
+
+test('Homebrew formula, Bun and pnpm installs are recognized from where they resolve', t => {
+  const layout = toolLayouts(t);
+  const owner = path => runtimeOwner(path, { env: {}, home: layout.root });
+
+  assert.deepEqual(
+    (({ kind, prefix, brew, formula }) => ({ kind, prefix, brew, formula }))(owner(join(layout.brewPrefix, 'bin/pi'))),
+    { kind: 'homebrew', prefix: layout.brewPrefix, brew: join(layout.brewPrefix, 'bin/brew'), formula: 'pi-coding-agent' },
+  );
+  const wrapper = join(layout.root, 'wrapper-pi');
+  writeFileSync(wrapper, `#!/bin/sh\nexec ${join(layout.brewPrefix, 'bin/pi')} "$@"\n`);
+  assert.equal(owner(wrapper).kind, 'homebrew');
+
+  assert.deepEqual((({ kind, root }) => ({ kind, root }))(owner(join(layout.bunRoot, 'bin/pi'))),
+    { kind: 'bun', root: layout.bunRoot });
+  assert.deepEqual((({ kind, home: pnpmHome }) => ({ kind, home: pnpmHome }))(owner(join(layout.pnpmHome, 'bin/pi'))),
+    { kind: 'pnpm', home: layout.pnpmHome });
+
+  rmSync(join(layout.pnpmHome, 'global'), { recursive: true });
+  assert.equal(owner(join(layout.pnpmHome, 'bin/pi')).kind, 'external');
+});
+
+test('a pre-11 pnpm shim is followed through its $basedir path', () => {
+  const shim = '/Users/me/Library/pnpm/pi';
+  const source = `#!/bin/sh\nbasedir=$(dirname "$0")\nexec node  "$basedir/global/5/node_modules/${PACKAGE}/dist/bundle/cli.js" "$@"\n`;
+  assert.equal(pnpmShimTarget(shim, { readFile: () => source }),
+    `/Users/me/Library/pnpm/global/5/node_modules/${PACKAGE}/dist/bundle/cli.js`);
+  assert.equal(pnpmShimTarget(shim, { readFile: () => '#!/bin/sh\nexec node "$basedir/other/cli.js" "$@"\n' }), null);
+});
+
+// `pi --version` reports `before` until the tool's update command has run.
+function toolMachine({ owner, latest = '1.4.0', stable = latest, before = '1.2.0', after = latest, status = 0 }) {
+  const calls = [];
+  let updated = false;
+  const run = (command, args, options) => {
+    calls.push({ command, args, env: options?.env });
+    if (command === node && args[1] === 'view') return { status: 0, stdout: JSON.stringify(latest) };
+    if (args[0] === 'info') return { status: 0, stdout: JSON.stringify({ formulae: [{ versions: { stable } }] }) };
+    if (args[0] === 'upgrade' || args[0] === 'add') {
+      updated = status === 0;
+      return { status, stderr: status ? 'tool failed' : '' };
+    }
+    if (args.includes('--version')) return { status: 0, stdout: updated ? after : before };
+    return { status: 1 };
+  };
+  return { calls, run, updates: () => calls.filter(call => ['upgrade', 'add'].includes(call.args[0])) };
+}
+
+test('updateLatest upgrades a Homebrew formula with brew, to the version Homebrew offers', t => {
+  const layout = toolLayouts(t);
+  const command = join(layout.brewPrefix, 'bin/pi');
+  const m = toolMachine({ latest: '1.5.0', stable: '1.4.0', after: '1.4.0' });
+  const result = updateLatest({ env: { PATH: '/usr/bin' }, home: layout.root, node, run: m.run, find: () => command });
+  assert.equal(result.version, '1.4.0');
+  assert.equal(result.latest, '1.4.0');
+  assert.equal(result.changed, true);
+  assert.deepEqual(m.calls.filter(call => call.command !== command).map(call => [call.command, ...call.args]), [
+    [join(layout.brewPrefix, 'bin/brew'), 'info', '--json=v2', 'pi-coding-agent'],
+    [join(layout.brewPrefix, 'bin/brew'), 'upgrade', 'pi-coding-agent'],
+  ]);
+
+  const current = toolMachine({ before: '1.4.0' });
+  assert.equal(updateLatest({ env: {}, home: layout.root, node, run: current.run, find: () => command }).changed, false);
+  assert.equal(current.updates().length, 0);
+});
+
+test('updateLatest adds the exact npm latest with Bun or pnpm in their own homes', t => {
+  const layout = toolLayouts(t);
+  const bun = toolMachine({});
+  const bunCommand = join(layout.bunRoot, 'bin/pi');
+  assert.equal(updateLatest({ env: { PATH: '/usr/bin' }, home: layout.root, node, run: bun.run, find: () => bunCommand }).version, '1.4.0');
+  const [bunUpdate] = bun.updates();
+  assert.deepEqual([bunUpdate.command, ...bunUpdate.args], ['bun', 'add', '--global', `${PACKAGE}@1.4.0`]);
+  assert.equal(bunUpdate.env.BUN_INSTALL, layout.bunRoot);
+  assert.ok(bunUpdate.env.PATH.startsWith(`${join(layout.bunRoot, 'bin')}:`));
+
+  writeFileSync(join(layout.pnpmHome, 'pnpm'), '#!/bin/sh\n', { mode: 0o755 });
+  const pnpm = toolMachine({});
+  const pnpmCommand = join(layout.pnpmHome, 'bin/pi');
+  assert.equal(updateLatest({ env: { PATH: '/usr/bin' }, home: layout.root, node, run: pnpm.run, find: () => pnpmCommand }).version, '1.4.0');
+  const [pnpmUpdate] = pnpm.updates();
+  assert.deepEqual([pnpmUpdate.command, ...pnpmUpdate.args],
+    [join(layout.pnpmHome, 'pnpm'), 'add', '--global', '--config.ignore-scripts=true', `${PACKAGE}@1.4.0`]);
+  assert.equal(pnpmUpdate.env.PNPM_HOME, layout.pnpmHome);
+  assert.ok(pnpmUpdate.env.PATH.startsWith(`${join(layout.pnpmHome, 'bin')}:${layout.pnpmHome}:`));
+});
+
+test('tool updates refuse a prerelease and fail when the tool or the result does', t => {
+  const layout = toolLayouts(t);
+  const command = join(layout.bunRoot, 'bin/pi');
+  const update = m => () => updateLatest({ env: {}, home: layout.root, node, run: m.run, find: () => command });
+
+  const prerelease = toolMachine({ latest: '1.5.0-beta.1' });
+  assert.throws(update(prerelease), /1\.5\.0-beta\.1 不是当前插件支持的稳定版本，未更新/);
+  assert.equal(prerelease.updates().length, 0);
+
+  assert.throws(update(toolMachine({ status: 1 })), error => !(error instanceof RollbackError) && /Bun 全局安装.*更新 Pi 失败：tool failed/.test(error.message));
+  assert.throws(update(toolMachine({ after: '1.2.0' })), /Pi 1\.2\.0 仍低于 npm latest 1\.4\.0/);
 });

@@ -2,8 +2,8 @@
   "name": "@coda-console/pi",
   "id": "pi",
   "displayName": "Pi",
-  "description": "Pi Agent 插件：接管本机已有 Pi，缺失时自动安装，并可随 npm 最新版更新，以 RPC 模式接入 Coda。",
-  "version": "0.5.0",
+  "description": "Pi Agent 插件：接管本机已有 Pi，缺失时自动安装，并可经 npm、Homebrew、Bun 或 pnpm 更新到最新版，以 RPC 模式接入 Coda。",
+  "version": "0.5.1",
   "categories": [
     "Agent"
   ],
@@ -33,14 +33,14 @@
         "pi.commandPath": {
           "type": "string",
           "default": "pi",
-          "description": "留为 pi 时依次使用 PATH、常见 npm/Homebrew/Bun 安装和插件安装到 ~/.local/bin 的 Pi；填命令或绝对路径可强制指定。显式路径不会被静默替换。",
+          "description": "留为 pi 时依次使用 PATH、常见 npm/Homebrew/Bun/pnpm 安装和插件安装到 ~/.local/bin 的 Pi；填命令或绝对路径可强制指定。显式路径不会被静默替换。",
           "order": 1
         },
         "pi.updateLatest": {
           "type": "boolean",
           "title": "Pi 跟随最新版",
           "default": false,
-          "description": "打开并保存设置后，Coda 会运行准备环境，把可识别的 npm 或插件管理的 Pi 更新到 npm latest。关闭时只接管并验证已有 Pi，未安装时才安装 latest；非 npm 的自定义安装不会被覆盖。",
+          "description": "打开并保存设置后，Coda 会运行准备环境更新 Pi：npm 与插件安装的升级到 npm latest，Homebrew 软件包用 brew upgrade，Bun、pnpm 全局安装用它们自己的 add -g。关闭时只接管并验证已有 Pi，未安装时才安装 latest；无法识别来源的自定义安装不会被覆盖。",
           "order": 2
         },
         "pi.extraArgs": {
