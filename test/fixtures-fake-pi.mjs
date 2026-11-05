@@ -4,7 +4,7 @@ import { createInterface } from 'node:readline';
 const args = process.argv.slice(2);
 const trace = value => { if (process.env.FAKE_PI_TRACE) appendFileSync(process.env.FAKE_PI_TRACE, JSON.stringify({ pid: process.pid, ...value }) + '\n'); };
 trace({ kind: 'start', args });
-if (args.includes('--version')) { console.log(process.env.FAKE_PI_VERSION || '1.1.0'); process.exit(0); }
+if (args.includes('--version')) { console.log(process.env.FAKE_PI_VERSION); process.exit(0); }
 if (args.includes('--help')) { console.log('Options:\n  --mode <mode>    Mode\n  --print, -p      Print\n'); process.exit(0); }
 if (args.includes('--print')) { console.log('测试会话'); process.exit(0); }
 const promptPath = args[args.indexOf('--append-system-prompt') + 1];

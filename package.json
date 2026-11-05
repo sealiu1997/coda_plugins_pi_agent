@@ -2,8 +2,8 @@
   "name": "@coda-console/pi",
   "id": "pi",
   "displayName": "Pi",
-  "description": "Pi Agent 插件：接管本机已有 Pi，缺失时自动安装，并可经 npm、Homebrew、Bun 或 pnpm 更新到最新版，以 RPC 模式接入 Coda。",
-  "version": "0.5.1",
+  "description": "Pi Agent 插件：接管本机已有 Pi，缺失时自动安装插件验证过的系列（版本号前两段 X.Y 即 Pi 的 X.Y 系列），并可经 npm、Homebrew、Bun 或 pnpm 更新到最新版，以 RPC 模式接入 Coda。",
+  "version": "1.5.0",
   "categories": [
     "Agent"
   ],
@@ -25,7 +25,7 @@
           "${PI_CODING_AGENT_DIR:-~/.pi/agent}/settings.json",
           "${PI_CODING_AGENT_DIR:-~/.pi/agent}/models.json"
         ],
-        "setupHint": "插件会接管这台机器已有的 Pi；未安装时自动安装 npm latest 到 ~/.local/bin。在设置中打开「Pi 跟随最新版」并保存可更新。装不上时在插件页重试准备运行环境"
+        "setupHint": "插件会接管这台机器已有的 Pi，没装时自动安装插件验证过的系列（版本号前两段 X.Y），新于该系列的 Pi 照常使用；各安装方式如何升级见设置「Pi 跟随最新版」的说明。装不上时在插件页重试准备运行环境"
       }
     ],
     "configuration": {
@@ -40,7 +40,7 @@
           "type": "boolean",
           "title": "Pi 跟随最新版",
           "default": false,
-          "description": "打开并保存设置后，Coda 会运行准备环境更新 Pi：npm 与插件安装的升级到 npm latest，Homebrew 软件包用 brew upgrade，Bun、pnpm 全局安装用它们自己的 add -g。关闭时只接管并验证已有 Pi，未安装时才安装 latest；无法识别来源的自定义安装不会被覆盖。",
+          "description": "默认跟随插件验证过的系列（插件版本号前两段 X.Y 即 Pi 的 X.Y 系列）：已有的 Pi 只接管验证，不低于该系列就不改动，新于该系列的照常使用并提示尚未验证；未安装或低于该系列时，npm 与插件安装的装该系列的最新补丁（Homebrew、Bun、pnpm 无法钉系列，按各自工具给出的版本安装）。打开并保存后改为跟随最新版：Coda 会运行准备环境更新 Pi，npm 与插件安装的升级到 npm latest，Homebrew 软件包用 brew upgrade，Bun、pnpm 全局安装用它们自己的 add -g。无法识别来源的自定义安装不会被覆盖。",
           "order": 2
         },
         "pi.extraArgs": {
@@ -136,7 +136,7 @@
   ],
   "devDependencies": {
     "@coda-console/plugin-check": "0.5.8",
-    "@earendil-works/pi-coding-agent": "1.4.0"
+    "@earendil-works/pi-coding-agent": "1.5.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",

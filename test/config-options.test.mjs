@@ -89,3 +89,21 @@ test("the thinking sentinel only shows on the baseline model", () => {
   const baseline = buildConfigOptions(session());
   assert.deepEqual(baseline.find(o => o.id === "thinking").options[0], DEFAULT_OPTION);
 });
+
+test("a model that can turn thinking off lists off with the other levels and offers it as a choice", () => {
+  // GPT-6.1 Terra reports off first, then the levels it supports.
+  const levels = ["off", "low", "medium", "high", "xhigh", "max"];
+  const thinking = buildConfigOptions(session({ thinkingLevels: levels, currentThinkingLevel: "off" }))
+    .find(o => o.id === "thinking");
+  assert.deepEqual(thinking.options.map(o => o.value), ["default", ...levels]);
+  assert.equal(thinking.currentValue, "off");
+  assert.equal(thinking.options.find(o => o.value === "off").name, "off");
+  // Switching away from off and back keeps off listed once, as a plain choice.
+  const back = buildConfigOptions(session({ thinkingLevels: levels, currentThinkingLevel: "high" })).find(o => o.id === "thinking");
+  assert.equal(back.currentValue, "high");
+  assert.equal(back.options.filter(o => o.value === "off").length, 1);
+  // off plus one other level is still a choice worth showing; off alone is not.
+  const two = buildConfigOptions(session({ thinkingLevels: ["off", "high"], currentThinkingLevel: "off" })).find(o => o.id === "thinking");
+  assert.deepEqual(two.options.map(o => o.value), ["default", "off", "high"]);
+  assert.equal(buildConfigOptions(session({ thinkingLevels: ["off"], currentThinkingLevel: "off" })).find(o => o.id === "thinking"), undefined);
+});

@@ -2,30 +2,65 @@
 // otherwise prefer PATH and the usual npm/Homebrew/Bun install locations. The plugin never
 // silently substitutes a private runtime for an installation the machine already has.
 import { execFile, spawnSync } from 'node:child_process';
-import { accessSync, constants, readdirSync, statSync } from 'node:fs';
+import { accessSync, constants, readFileSync, readdirSync, statSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
 
 export const PACKAGE = '@earendil-works/pi-coding-agent';
-export const MIN_PI_VERSION = '1.1.0';
-export const VERIFIED_PI_VERSION = '1.4.0';
+// The plugin version is X.Y.Z: X.Y is the Pi series this release was verified against (Pi's own
+// X.Y.*), Z is the plugin's patch number. package.json is the single source of truth. A plugin
+// version that is not a usable Pi series (0.x, unreadable or malformed manifest) falls back to the
+// last series verified before this scheme, so the floor can never drop below the one that shipped.
+export const FALLBACK_PI_SERIES = '1.5';
+const SERIES_FLOOR = [1, 1];
+
+export function readPiSeries({
+  read = readFileSync,
+  url = new URL('../package.json', import.meta.url),
+} = {}) {
+  try {
+    const parts = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:[-+][\w.+-]+)?$/.exec(JSON.parse(read(url, 'utf8')).version);
+    if (parts) {
+      const [major, minor] = [Number(parts[1]), Number(parts[2])];
+      if (major > SERIES_FLOOR[0] || (major === SERIES_FLOOR[0] && minor >= SERIES_FLOOR[1])) {
+        return `${major}.${minor}`;
+      }
+    }
+  } catch {
+    // Unreadable or unparsable: use the fallback below.
+  }
+  return FALLBACK_PI_SERIES;
+}
+
+export const PI_SERIES = readPiSeries();
+export const MIN_PI_VERSION = `${PI_SERIES}.0`;
+export const VERIFIED_PI_VERSION = '1.5.0';
 
 export const parsePiVersion = output => {
-  const match = String(output ?? '').match(/\bv?(\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?)\b/);
+  const match = String(output ?? '').match(/\bv?((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[\w.-]+)?(?:\+[\w.-]+)?)\b/);
   return match?.[1] ?? null;
 };
 
-export function supportedVersion(version) {
-  const parts = /^(\d+)\.(\d+)\.(\d+)(?:\+[^ ]+)?$/.exec(version ?? '');
-  if (!parts) return false;
-  const minimum = MIN_PI_VERSION.split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    const n = Number(parts[i + 1]);
-    if (n !== minimum[i]) return n > minimum[i];
-  }
-  return true;
+// 'unsupported' is below the series floor (or not a plain release), 'verified' is the series
+// this plugin was checked against, 'unverified' is a newer series that still runs.
+export function piVersionStatus(version, series = PI_SERIES) {
+  const parts = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[^ ]+)?$/.exec(version ?? '');
+  if (!parts) return 'unsupported';
+  const [major, minor] = series.split('.').map(Number);
+  const [vMajor, vMinor] = [Number(parts[1]), Number(parts[2])];
+  if (vMajor !== major) return vMajor > major ? 'unverified' : 'unsupported';
+  if (vMinor !== minor) return vMinor > minor ? 'unverified' : 'unsupported';
+  return 'verified';
 }
+
+// Usable by the plugin: the verified series or newer.
+export const supportedVersion = version => piVersionStatus(version) !== 'unsupported';
+
+// The setup line for a Pi that runs but is newer than the verified series; null when verified.
+export const unverifiedNotice = version => piVersionStatus(version) === 'unverified'
+  ? `Pi ${version} 高于本插件验证过的 ${PI_SERIES} 系列，仍可使用但尚未验证；建议在插件页更新 Pi 插件。`
+  : null;
 
 export function normalizePiLaunch(value) {
   if (value && typeof value === 'object' && typeof value.command === 'string') {

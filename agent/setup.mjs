@@ -4,9 +4,11 @@ import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import {
   MIN_PI_VERSION,
+  PI_SERIES,
   findPi,
   managedPrefix,
   supportedVersion,
+  unverifiedNotice,
   versionOf,
 } from './pi-command.mjs';
 import {
@@ -31,8 +33,10 @@ const parseSettings = value => {
 
 // 0 once a supported Pi runs on this machine; 1 with the reason as the last line. Coda runs
 // this after install, update and plugin-settings changes. Existing Pi installations are taken
-// over first. A missing Pi is installed into ~/.local; opt-in latest mode updates npm installs in
-// place and Homebrew, Bun or pnpm installs through those tools.
+// over first. A missing or too old Pi gets the newest patch of the series this plugin was
+// verified against (npm; Homebrew, Bun and pnpm cannot pin one and get what their tool offers).
+// Opt-in latest mode updates to npm latest instead. A Pi newer than the verified series is never
+// refused: it runs, with a note that it is unverified.
 export function setup({
   env = process.env,
   home = homedir(),
@@ -75,6 +79,14 @@ export function setup({
   const version = launch === 'pi' ? null : versionOf(launch, { env, node, run });
   const installable = UPDATABLE.has(owner.kind);
 
+  // The one place a ready Pi is reported, so a newer-than-verified Pi always gets its note.
+  const ready = (line, readyVersion) => {
+    say(line);
+    const notice = unverifiedNotice(readyVersion);
+    if (notice) say(notice);
+    return 0;
+  };
+
   const install = ({ updateRequested }) => {
     if (explicitlyConfigured && !version) {
       fail(`设置里的 Pi 路径无法运行：${configured}。请改正 pi.commandPath，或改回 pi 使用自动发现/插件安装。`);
@@ -85,9 +97,11 @@ export function setup({
       return 1;
     }
     const target = updateTarget(owner, { env, home });
-    say(`${owner.kind === 'none' ? '安装' : '更新'} Pi latest 到 ${target}`);
+    // Only npm can pin a series; the other tools install what they offer.
+    const pinned = !followLatest && (owner.kind === 'none' || owner.kind === 'managed' || owner.kind === 'npm');
+    say(`${owner.kind === 'none' ? '安装' : '更新'} Pi ${pinned ? `${PI_SERIES}.x` : 'latest'} 到 ${target}`);
     try {
-      const installed = update({ env, home, node, run, find, realpath });
+      const installed = update({ env, home, node, run, find, realpath, series: pinned ? PI_SERIES : null });
       // Ready means the Pi the Agent will start, found by the same rules, is the one just checked.
       const started = find(settings, { env, home });
       const startedVersion = started === 'pi' ? null : versionOf(started, { env, node, run });
@@ -95,20 +109,16 @@ export function setup({
         fail(`装好了 Pi ${installed.version ?? '版本未知'}（${installed.path ?? target}），但 Agent 会启动的 ${started} 是 ${startedVersion ?? '无法运行'}，最低需要 ${MIN_PI_VERSION}。请检查 pi.commandPath。`);
         return 1;
       }
-      if (installed.changed === false) {
-        say(`Pi ${startedVersion} 已是最新版本：${started}`);
-      } else {
-        say(`${owner.kind === 'none' ? '已安装' : updateRequested ? '已更新到' : '已升级到兼容版本'} Pi ${startedVersion}：${started}`);
-      }
-      return 0;
+      return ready(installed.changed === false
+        ? `Pi ${startedVersion} 已是最新版本：${started}`
+        : `${owner.kind === 'none' ? '已安装' : updateRequested ? '已更新到' : '已升级到兼容版本'} Pi ${startedVersion}：${started}`, startedVersion);
     } catch (error) {
       // Probe again: the snapshot taken before the update says nothing about what is installed now.
       const current = !(error instanceof RollbackError) && version
         ? versionOf(launch, { env, node, run })
         : null;
       if (current && supportedVersion(current)) {
-        say(`更新 Pi 失败，继续使用已有的 Pi ${current}（${launch}）：${error.message}`);
-        return 0;
+        return ready(`更新 Pi 失败，继续使用已有的 Pi ${current}（${launch}）：${error.message}`, current);
       }
       fail(`${owner.kind === 'none' ? '安装' : '更新'} Pi 失败：${error.message}`);
       return 1;
@@ -135,14 +145,12 @@ export function setup({
 
   if (followLatest) {
     if (!installable) {
-      say(`已有 Pi ${version} 可用：${launch}。它来自无法自动升级的安装方式；继续使用现有版本，请用原来的安装工具更新。`);
-      return 0;
+      return ready(`已有 Pi ${version} 可用：${launch}。它来自无法自动升级的安装方式；继续使用现有版本，请用原来的安装工具更新。`, version);
     }
     return install({ updateRequested: true });
   }
 
-  say(`已有 Pi ${version} 可用：${launch}`);
-  return 0;
+  return ready(`已有 Pi ${version} 可用：${launch}`, version);
 }
 
 // Run as a command (Node names the module by its real path, so the path it was given is resolved the same way).

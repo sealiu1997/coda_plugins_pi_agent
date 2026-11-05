@@ -23,6 +23,12 @@ const QUOTA_PATTERN = new RegExp([
   "reached your .{0,40}usage limit",
 ].join("|"), "i");
 
+// Zhipu/Z.ai code 1308 (the plan's usage cap, sent as HTTP 429 with a localized message): Pi stopped
+// retrying it as a transient 429 in 1.5. Matches the code in the JSON body, plain or escaped, as a whole token.
+const ZAI_USAGE_LIMIT = new RegExp(String.raw`\bcode["\\]*\s*[:=]\s*["\\]*1308(?![\w.])`, "i");
+const EXPLICIT_VALIDATION_STATUS = /\b(?:400|422)\b/;
+const RATE_LIMIT_STATUS = /\b429\b/;
+
 const RETRYABLE_SERVICE_PATTERNS = [
   "^\\s*(?:error:?\\s*)?5(?:00|02|03|04|20|24|29)\\b",
   "\\b(?:http|status|status code|code)[\\s:=]*5(?:00|02|03|04|20|24|29)\\b",
@@ -81,6 +87,11 @@ const SERVICE_PATTERN = new RegExp(RETRYABLE_SERVICE_PATTERNS.join("|"), "i");
 export function classifyPiFailure(errorMessage) {
   if (typeof errorMessage !== "string" || !errorMessage.trim()) return null;
   if (QUOTA_PATTERN.test(errorMessage)) return { kind: "quota_exhausted" };
+  // A bare 400/422 carrying 1308 is a request error, left to the validation exclusion below.
+  if (ZAI_USAGE_LIMIT.test(errorMessage)
+    && (!EXPLICIT_VALIDATION_STATUS.test(errorMessage) || RATE_LIMIT_STATUS.test(errorMessage))) {
+    return { kind: "quota_exhausted" };
+  }
   if (CONFIG_OR_CODE_EXCLUSION.test(errorMessage)) return null;
   if (REQUEST_VALIDATION_PATTERN.test(errorMessage)) return null;
   if (AUTH_PATTERN.test(errorMessage)) return null;

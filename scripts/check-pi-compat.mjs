@@ -70,6 +70,7 @@ export function members(body) {
     return m ? [[m[1], { type: m[3], optional: !!m[2] }]] : [];
   }));
 }
+const SCHEMA_WRAPPER = /^(?:import\([^)]*\)\.)?Schema<([\s\S]+)>$/;
 function variants(type, db, seen = new Set()) {
   if (!type || seen.has(type)) return [];
   seen = new Set([...seen, type]);
@@ -84,6 +85,9 @@ function variants(type, db, seen = new Set()) {
   }
   const staticValue = type.match(/^Static<\s*typeof\s+(\w+)\s*>$/);
   if (staticValue) return variants(staticValue[1], db, seen);
+  // pi-schema declares a schema as `Schema<T>` (Pi 1.5 on), spelled `import("...").Schema<T>` in a .d.ts.
+  const schema = type.match(SCHEMA_WRAPPER);
+  if (schema) return variants(schema[1], db, seen);
   const wrapper = type.match(/^Type\.(TObject|TOptional|TReadonlyOptional|TArray|TUnion|TIntersect|TLiteral)<([\s\S]+)>$/);
   if (wrapper) {
     const [, name, inner] = wrapper;
@@ -147,6 +151,8 @@ function scalarTypes(t, db, seen = new Set()) {
   if (bare) return [bare];
   const staticValue = t.match(/^Static<\s*typeof\s+(\w+)\s*>$/);
   if (staticValue) return scalarTypes(staticValue[1], db, seen);
+  const schema = t.match(SCHEMA_WRAPPER);
+  if (schema) return scalarTypes(schema[1], db, seen);
   const wrapper = t.match(/^Type\.(TObject|TOptional|TReadonlyOptional|TArray|TUnion|TIntersect|TLiteral|TString|TNumber|TInteger|TBoolean|TNull|TRecord|TEnum)<([\s\S]+)>$/);
   if (wrapper) {
     const [, name, inner] = wrapper;

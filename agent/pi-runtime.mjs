@@ -71,8 +71,15 @@ export function compareVersions(a, b) {
   return 0;
 }
 
-export function latestVersion({ env = process.env, node = process.execPath, run = spawnSync, timeout = 12_000 } = {}) {
-  const result = run(node, [npmCli(node), 'view', `${PACKAGE}@latest`, 'version', '--json', '--no-update-notifier'], {
+// The newest version npm offers: the `latest` tag, or the newest patch of a Pi series such as "1.5".
+export function latestVersion({
+  env = process.env,
+  node = process.execPath,
+  run = spawnSync,
+  timeout = 12_000,
+  series = null,
+} = {}) {
+  const result = run(node, [npmCli(node), 'view', `${PACKAGE}@${series ?? 'latest'}`, 'version', '--json', '--no-update-notifier'], {
     encoding: 'utf8',
     timeout,
     env: withNode(env, node),
@@ -80,7 +87,13 @@ export function latestVersion({ env = process.env, node = process.execPath, run 
   if (result.status !== 0) {
     throw new Error(result.error?.message || result.stderr?.trim() || `npm view 退出码 ${result.status ?? result.signal}`);
   }
-  const version = parsePiVersion(result.stdout);
+  // A range that matches several versions comes back as a JSON array, one that matches one as a string.
+  let value = result.stdout;
+  try {
+    value = JSON.parse(result.stdout);
+  } catch {}
+  const versions = (Array.isArray(value) ? value : [value]).map(parsePiVersion).filter(Boolean);
+  const version = versions.reduce((best, candidate) => compareVersions(candidate, best) > 0 ? candidate : best, versions[0]);
   if (!version) throw new Error('npm view 没有返回版本号');
   return version;
 }
@@ -632,11 +645,11 @@ function backupInstallation(prefix, { env = process.env } = {}) {
   };
 }
 
-const checkInstalled = (version, path, latest) => {
+const checkInstalled = (version, path, latest, series = null) => {
   if (!version) throw new Error(`安装完成，但 ${path} 无法运行`);
   const comparison = compareVersions(version, latest);
   if (comparison === null || comparison < 0) {
-    throw new Error(`安装完成，但 Pi ${version} 仍低于 npm latest ${latest}`);
+    throw new Error(`安装完成，但 Pi ${version} 仍低于 npm ${series ? `${series} 系列最新版` : 'latest'} ${latest}`);
   }
   if (!supportedVersion(version)) {
     throw new Error(`安装完成，但 Pi ${version} 不是当前插件支持的稳定版本`);
@@ -647,12 +660,13 @@ const checkInstalled = (version, path, latest) => {
 // npm writes only into a fresh stage beside the real installation. If setup dies while npm keeps
 // running, that orphan can only touch the stage. The real package and command change by renames
 // in this process, after the staged Pi has run.
-function installStaged({ prefix, latest, verificationPath, env, node, run }) {
+function installStaged({ prefix, latest, series, verificationPath, env, node, run }) {
   const stage = mkdtempSync(join(prefix, stagePrefix));
   try {
     const result = run(node, [
       npmCli(node), 'install', '--global', '--prefix', stage, '--ignore-scripts',
-      '--no-fund', '--no-audit', '--no-update-notifier', `${PACKAGE}@${latest}`,
+      // A series installs as `@X.Y`, which npm resolves to that series' newest patch.
+      '--no-fund', '--no-audit', '--no-update-notifier', `${PACKAGE}@${series ?? latest}`,
     ], {
       encoding: 'utf8',
       timeout: 8 * 60_000,
@@ -662,7 +676,7 @@ function installStaged({ prefix, latest, verificationPath, env, node, run }) {
       throw new Error(`安装 Pi 失败：${result.error?.message || result.stderr?.trim() || `npm 退出码 ${result.status ?? result.signal}`}`);
     }
     const staged = packageInstallationPaths(stage);
-    checkInstalled(versionOf(staged.command, { env, node, run }), staged.command, latest);
+    checkInstalled(versionOf(staged.command, { env, node, run }), staged.command, latest, series);
 
     const target = packageInstallationPaths(prefix);
     const installation = backupInstallation(prefix, { env });
@@ -671,7 +685,7 @@ function installStaged({ prefix, latest, verificationPath, env, node, run }) {
       mkdirSync(dirname(target.command), { recursive: true });
       renameSync(staged.package, target.package);
       renameSync(staged.command, target.command);
-      const version = checkInstalled(versionOf(verificationPath, { env, node, run }), verificationPath, latest);
+      const version = checkInstalled(versionOf(verificationPath, { env, node, run }), verificationPath, latest, series);
       installation.commit();
       return version;
     } catch (error) {
@@ -791,6 +805,8 @@ function updateWithTool(before, { env, home, node, run, realpath }) {
   };
 }
 
+// Brings Pi to npm latest, or with `series` (e.g. "1.5") to the newest patch of that series.
+// Homebrew, Bun and pnpm cannot pin a series, so they keep updating to what their tool offers.
 export function updateLatest({
   env = process.env,
   home = homedir(),
@@ -798,6 +814,7 @@ export function updateLatest({
   run = spawnSync,
   realpath = realpathSync,
   find = findPi,
+  series = null,
 } = {}) {
   const before = inspectRuntime({ env, home, node, run, realpath, find, checkLatest: false });
   if (TOOLS.has(before.owner.kind)) return updateWithTool(before, { env, home, node, run, realpath });
@@ -808,7 +825,7 @@ export function updateLatest({
     const suffix = before.path ? `：${before.path}` : '';
     throw new Error(`Pi 来自无法自动升级的安装方式${suffix}。请用原来的安装工具升级，或在 pi.commandPath 中改为 npm、Homebrew、Bun 或 pnpm 安装的 Pi`);
   }
-  const latest = latestVersion({ env, node, run });
+  const latest = latestVersion({ env, node, run, series });
   const comparison = compareVersions(before.version, latest);
   if (comparison !== null && comparison >= 0) {
     return {
@@ -824,7 +841,7 @@ export function updateLatest({
   const release = acquireUpdateLock(prefix, { env });
   let version;
   try {
-    version = installStaged({ prefix, latest, verificationPath, env, node, run });
+    version = installStaged({ prefix, latest, series, verificationPath, env, node, run });
   } finally {
     release();
   }

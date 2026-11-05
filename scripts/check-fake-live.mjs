@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 import { ProcessScope, minimalEnv } from './process-scope.mjs';
+import { MIN_PI_VERSION } from '../agent/pi-command.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 export function assertResumeEvidence(output, records) {
@@ -37,7 +38,7 @@ export async function checkFakeLive({ live = true, fail, version, transformEntry
     manifest.contributes.configuration.properties['pi.commandPath'].default = fake;
     writeFileSync(join(plugin, 'package.json'), JSON.stringify(manifest));
     const result = await scope.run(process.execPath, [checker, plugin, ...(live ? ['--live'] : [])], {
-      env: { ...minimalEnv(temp), FAKE_PI_TRACE: trace, ...(fail ? { FAKE_PI_FAIL: fail } : {}), ...(version ? { FAKE_PI_VERSION: version } : {}) }, cwd: temp, timeout: 60000, grace: 3000,
+      env: { ...minimalEnv(temp), FAKE_PI_TRACE: trace, ...(fail ? { FAKE_PI_FAIL: fail } : {}), FAKE_PI_VERSION: version ?? MIN_PI_VERSION }, cwd: temp, timeout: 60000, grace: 3000,
     });
     const records = readFileSync(trace, 'utf8').trim().split('\n').map(JSON.parse);
     if (live) {

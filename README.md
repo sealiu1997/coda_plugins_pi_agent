@@ -5,11 +5,16 @@
 ## 要求
 
 - 插件优先接管这台机器已有的 Pi：先看 `pi.commandPath`，再看 PATH，以及 npm、Homebrew、Bun、Volta、pnpm、nvm、fnm、asdf 等常见安装位置。
-- 没找到可运行的 Pi 时，安装流程用 Coda 自带的 Node/npm 把 `@earendil-works/pi-coding-agent@latest` 装到用户预期的 `~/.local` npm prefix，入口是 `~/.local/bin/pi`。
-- 运行时最低版本门槛是 Pi **1.1.0**；普通 CI 固定验证 **1.4.0**。隔离扫描 1.1.0 目前没有确定不兼容项，但仍有 4 项声明差异需要人工判断，因此不把 1.1.0 写成已由自动化完整验证。设置里的「Pi 跟随最新版」打开并保存后，会通过准备运行环境更新可识别的 npm、Homebrew、Bun、pnpm 或插件管理的安装。
+- 没找到可运行的 Pi 时，安装流程用 Coda 自带的 Node/npm 把插件验证过的系列（`@earendil-works/pi-coding-agent@X.Y`，即该系列最新补丁；X.Y 见下面的版本约定）装到用户预期的 `~/.local` npm prefix，入口是 `~/.local/bin/pi`。
+- **版本约定**：插件版本 `X.Y.Z` 里，`X.Y` 是它验证过的 Pi 系列（Pi 的 `X.Y.*`），`Z` 是插件自己的补丁号；`package.json` 的 `version` 是唯一来源，运行时从它读出系列（读不到，或不是 ≥1.1 的系列，回退到 `1.5`）。运行时最低版本门槛是 `X.Y.0`；普通 CI 固定验证 devDependency 里的 Pi。
+  - 低于 `X.Y.0`：不支持，按下面的流程升级或报错。
+  - `X.Y.*`：已验证。
+  - 更高的次版本或主版本：照常使用，但 setup 输出一行「尚未验证」提示，建议更新插件；绝不因为你自己升级了 Pi 就起不来。
+  - 为什么不是「版本号严格等于 Pi 版本」：插件自己的修复没有版本号可用——Coda 比较版本时忽略 `+build`，npm 也会规整掉它，`-pre` 又排在正式版之前，所以第三段留给插件自己的补丁号。
+- 设置里的「Pi 跟随最新版」打开并保存后，会通过准备运行环境把可识别的 npm、Homebrew、Bun、pnpm 或插件管理的安装更新到最新版；默认（关闭）则只在缺失或低于验证系列时处理：缺失或插件管理的安装装验证系列的最新补丁，npm 安装在原 prefix 原地升级，Homebrew、Bun、pnpm 按各自工具给出的版本，无法识别来源的自定义安装升不了，会报错并提示用原来的安装工具升级。
 - 自定义脚本、独立下载等无法识别来源的安装会被接管和验证，但不会被静默覆盖。需要由插件自动更新时，应使用 npm、Homebrew、Bun 或 pnpm 安装，或用 `pi.commandPath` 明确指向这样一个安装。
 - 还要在 Coda 里添加 provider（见下），或在 pi 里完成登录。
-- Node 由 Coda 提供（`$CODA_NODE`）。Pi 是独立的本机安装；Pi 1.4.0 和 Coda 官方检查器只作为开发、CI 与兼容扫描的 devDependency。
+- Node 由 Coda 提供（`$CODA_NODE`）。Pi 是独立的本机安装；Pi 1.5.0 和 Coda 官方检查器只作为开发、CI 与兼容扫描的 devDependency。
 - 直接使用本机 Pi 的配置、登录、扩展与会话目录（`$PI_CODING_AGENT_DIR`，默认 `~/.pi/agent`），插件不复制也不改写它们；Coda 里开的会话也能在 `pi --resume` 里看到。
 
 ## 安装
@@ -25,7 +30,7 @@
 | 设置 | 默认值 | 说明 |
 | --- | --- | --- |
 | `pi.commandPath` | `pi` | 留为 `pi` 时自动接管本机已有 Pi；未安装时使用插件安装到 `~/.local/bin` 的 Pi。填其他命令或绝对路径时强制指定，显式路径不会被静默替换。 |
-| `pi.updateLatest` | 关 | 打开并保存后，准备运行环境会把可识别的 npm 或插件管理的 Pi 更新到 npm latest。关闭时只接管并验证已有安装。 |
+| `pi.updateLatest` | 关 | 默认跟随插件验证过的系列；打开并保存后，准备运行环境会把可识别的 npm 或插件管理的 Pi 更新到 npm latest。关闭时只接管并验证已有安装，缺失或低于验证系列时才处理（缺失或插件管理的装验证系列的最新补丁，npm 原地升级，其余按各自工具，无法识别来源的会报错）。 |
 | `pi.extraArgs` | 空 | 追加到 `pi --mode rpc` 的额外 CLI 参数。 |
 | `pi.providers` | 无 | 一行一个 provider：地址、Key（密文）、协议、推理、上下文长度、最大输出。行名就是 Pi 里的 provider 名（不能带 `/`）。 |
 
@@ -78,14 +83,14 @@ Node ≥24。先 `npm ci --ignore-scripts`，再运行：
 | `npm run check:coda` | 官方 checker 0.5.8 清单检查与 fake Pi 握手 |
 | `npm run check:fake-live` | 官方 `coda-plugin-check --live` 驱动真实插件入口，覆盖系统指令、回合、取消、插话、恢复与关闭 |
 | `npm run check:pi` | 扫描本机自动找到的 Pi，核对 CLI/RPC/事件/扩展 API、能力新增与 changelog |
-| `npm run check:pi:verified` | 扫描 devDependency 中锁定的 Pi 1.4.0；普通 CI 使用这一项 |
+| `npm run check:pi:verified` | 扫描 devDependency 中锁定的 Pi 1.5.0；普通 CI 使用这一项 |
 | `npm run probe:upstream` | 手动运行独立的 latest 探测，报告写入 `compat-reports/` |
 | `npm run check:real-live` | **人工选择运行**：对本机真实 Pi 执行官方 live 检查，可能需要登录并消耗模型额度 |
 
 Coda 通用协议只复用官方 `@coda-console/plugin-check`，精确版本 **0.5.8** 与传递依赖写在 `package-lock.json`。不再维护另一套 Coda 协议扫描或协议基线。
 `check:coda` 的握手和 fake live 在临时插件副本中运行原始 `agent/` 文件，只把清单默认 `pi.commandPath` 指向 fake 可执行文件；不改你的设置或 Pi 配置。fake 也模拟 `--version`、`--help`、系统提示词文件与标题进程，且断言取消和轮中插话实际发生，跳过场景不能当作通过。
 
-普通 PR / main CI 只跑 lockfile 中的官方 checker 和开发用的 Pi 1.4.0。每日的 `Upstream compatibility advisory` workflow（也可手动发起）单独探测两个上游的 latest；上游变化或检查失败使这个独立任务告警，不进入普通 PR 的稳定检查。任务只给 `contents: read`，不使用 secrets，也不发布。
+普通 PR / main CI 只跑 lockfile 中的官方 checker 和开发用的 Pi 1.5.0。每日的 `Upstream compatibility advisory` workflow（也可手动发起）单独探测两个上游的 latest；上游变化或检查失败使这个独立任务告警，不进入普通 PR 的稳定检查。任务只给 `contents: read`，不使用 secrets，也不发布。
 它在 job summary 和 artifact 中保存版本与提交、官方 checker 结果、Pi JSON 报告，以及从固定 checker 发布提交到最新发布提交、上游 main 的 `docs/agent-protocol.md` diff 与相关提交列表。artifact 默认保留 30 天；新协议需人工判断插件是否需要接入，再提交固定版本和快照更新。
 
 Pi 扫描器用法与退出码见 [compat/NOTES.md](compat/NOTES.md)。无 `--accept` 时始终只读仓库基线；候选快照在 JSON 报告里。接受前检查完整报告与 changelog：
@@ -104,9 +109,10 @@ node scripts/check-pi-compat.mjs --accept
 安装或更新插件、保存插件设置后，Coda 都会运行 `agent/setup.mjs`：
 
 - 已有 Pi 且版本达标：直接使用，不改版本。
-- 没有 Pi：安装 npm latest 到 `~/.local`。
-- 自动发现的 npm 全局 Pi 低于最低版本：在它原来的 npm prefix 中升级。
-- 「Pi 跟随最新版」打开：保存设置后按安装来源更新，关闭后停止跟随：
+- 没有 Pi：安装插件验证过的系列（`@X.Y`，该系列最新补丁）到 `~/.local`。
+- 已有 Pi 新于验证过的系列：照常使用，输出「尚未验证」提示，不降级。
+- 自动发现的 npm 全局 Pi 低于最低版本：在它原来的 npm prefix 中升级到验证过的系列。Homebrew、Bun、pnpm 无法钉系列，沿用它们各自的做法，装完核对版本在不在 `X.Y.*`，不在就按「尚未验证」提示，不回滚、不报错。
+- 「Pi 跟随最新版」打开：保存设置后按安装来源更新到最新版（不再限于验证过的系列），关闭后停止跟随：
   - npm 全局安装（含 Homebrew 的 Node、nvm、fnm、asdf 下的）与插件安装到 `~/.local` 的：在原 npm prefix 中升级到 npm latest（见下面的 stage 与事务）。
   - Homebrew 软件包 `pi-coding-agent`：运行 `brew upgrade pi-coding-agent`，升级到 Homebrew 提供的版本（可能晚于 npm latest；按 Homebrew 的规则，过旧的依赖如 `node` 会一起升级）。
   - Bun 全局安装：在它的 `BUN_INSTALL` 中运行 `bun add --global @earendil-works/pi-coding-agent@<latest>`。
@@ -121,7 +127,7 @@ Coda 官方 Claude SDK 和 Codex 插件把各自的 SDK/CLI 锁在插件依赖�
 
 ## 发布
 
-`.github/workflows/publish.yml` 在合入 main 或手动发起时运行：`package.json` 的版本已在 npm 上就跳过；只有 registry 明确回答没有这个版本（E404）才发布，查询出错就失败，不当作未发布。发布前跑与 CI 相同的测试、Coda 检查、fake live 与 Pi 1.4.0 扫描。
+`.github/workflows/publish.yml` 在合入 main 或手动发起时运行：`package.json` 的版本已在 npm 上就跳过；只有 registry 明确回答没有这个版本（E404）才发布，查询出错就失败，不当作未发布。发布前跑与 CI 相同的测试、Coda 检查、fake live 与 固定版本的 Pi 扫描。
 
 它用 npm 的可信发布（Trusted Publisher，GitHub Actions OIDC）认证，不需要也不保存 npm token，发布的版本自动附带来源证明（provenance）。在 npmjs.com 的包设置 › Trusted Publisher 里登记一次：
 
@@ -133,5 +139,14 @@ Coda 官方 Claude SDK 和 Codex 插件把各自的 SDK/CLI 锁在插件依赖�
 | Workflow filename | `publish.yml` |
 | Environment | 留空 |
 
-所以发新版就是在 PR 里把 `package.json` 与 `package-lock.json` 的版本加一，合并后由这个 workflow 发布。
+所以发新版就是在 PR 里把 `package.json` 与 `package-lock.json` 的版本加一，合并后由这个 workflow 发布。插件自己的修复只加补丁号（`1.5.0` → `1.5.1`）；验证了新的 Pi 系列（如 1.6）时，把 `X.Y` 对齐过去、补丁号归零（`1.6.0`），同时把 devDependency 的 Pi 钉到该系列并更新 `compat/pi-snapshot.json`。
+
+## Pi 1.5 的适配结论
+
+对 1.5.0 的扫描没有确定不兼容项，因此插件版本对齐到 1.5.0。与 RPC 集成相关的几项：
+
+- Z.ai/智谱用量上限（错误码 `1308`）：Pi 1.5 不再把它当临时 429 重试，插件相应把它归为 `quota_exhausted`（此前只有错误文字里带英文额度措辞才会）；其他 429 限流仍是普通错误。
+- GPT-6.1 Terra 支持思考 `off`：`get_available_thinking_levels` 返回 `off` 与其余档位，「推理强度」照常列出 `off`，选它即 `set_thinking_level off`，会话中途改档位同理。
+- `Usage.cost.totalFromProvider`：Pi 的 `get_session_stats` 只返回一个合计数字 `cost`，不带这个标记，所以 `usage_update` 的 `cost` 与 `_meta.pi` 都不变。
+- 其余变更（TUI、扩展更新说明、导出、终端兼容、`PI_SELF_UPDATE_COMMAND`/`selfUpdateCommand`）对 RPC 无影响，未改代码。详见 [compat/NOTES.md](compat/NOTES.md)。
 
