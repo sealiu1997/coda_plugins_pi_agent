@@ -103,8 +103,10 @@ function npmMachine({
   version = () => null,
 } = {}) {
   const installs = [];
+  const views = [];
   const run = (command, args) => {
     if (command === node && args[0] === npm && args[1] === 'view') {
+      views.push(args);
       return { status: 0, stdout: JSON.stringify(latest) };
     }
     if (command === node && args[0] === npm && args[1] === 'install') {
@@ -122,7 +124,7 @@ function npmMachine({
     }
     return { status: 1 };
   };
-  return { run, installs };
+  return { run, installs, views };
 }
 
 function runFor({
@@ -186,6 +188,26 @@ test('latestVersion asks npm for the exact latest tag', () => {
   assert.equal(latestVersion({ env: {}, node, run: m.run }), '1.4.0');
   assert.deepEqual(m.ran, [[node, npm, 'view', `${PACKAGE}@latest`, 'version', '--json', '--no-update-notifier']]);
   assert.equal(m.calls[0].options.timeout, 12_000);
+});
+
+test('latestVersion asks for a series and takes its newest patch from npm\'s string or array answer', () => {
+  const answer = stdout => ({ status: 0, stdout });
+  const ask = stdout => {
+    const seen = [];
+    const version = latestVersion({ env: {}, node, series: '1.5', run: (command, args) => { seen.push(args); return answer(stdout); } });
+    return { version, args: seen[0] };
+  };
+  assert.deepEqual(ask('"1.5.0"').args, [npm, 'view', `${PACKAGE}@1.5`, 'version', '--json', '--no-update-notifier']);
+  assert.equal(ask('"1.5.0"').version, '1.5.0');
+  assert.equal(ask('["1.5.0","1.5.2","1.5.1"]').version, '1.5.2');
+  assert.equal(ask('["1.5.9","1.5.10"]').version, '1.5.10');
+  assert.equal(ask('["1.5.0"]\n').version, '1.5.0');
+  assert.throws(() => ask('[]'), /没有返回版本号/);
+  assert.throws(() => ask('""'), /没有返回版本号/);
+  // Without a series the question is still the latest tag.
+  const latest = [];
+  latestVersion({ env: {}, node, run: (command, args) => { latest.push(args[2]); return answer('"1.4.0"'); } });
+  assert.deepEqual(latest, [`${PACKAGE}@latest`]);
 });
 
 test('npmCli locates npm in Coda, Homebrew and nvm Node layouts', () => {
@@ -330,6 +352,49 @@ test('updateLatest installs into ~/.local for a missing Pi through a stage', t =
   ]);
   assert.equal(readFileSync(command, 'utf8'), '1.4.0\n');
   assert.deepEqual(leftovers(prefix), []);
+});
+
+test('a series installs as @X.Y so npm resolves its newest patch, and the result is checked against it', t => {
+  const fixture = packageFixture(t, '1.3.0');
+  const m = npmMachine({ latest: '1.4.2' });
+  const result = updateLatest({ env: {}, home: fixture.root, node, run: m.run, find: () => fixture.command, series: '1.4' });
+  assert.equal(result.version, '1.4.2');
+  assert.equal(result.latest, '1.4.2');
+  assert.equal(m.views[0][2], `${PACKAGE}@1.4`);
+  assert.equal(m.installs[0].at(-1), `${PACKAGE}@1.4`);
+  assert.deepEqual(leftovers(fixture.prefix), []);
+
+  // A fresh machine with no Pi gets the series too, into the managed prefix.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'pi-series-missing-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const command = managedPi({}, root);
+  const missing = npmMachine({ latest: '1.4.2' });
+  updateLatest({ env: {}, home: root, node, run: missing.run, series: '1.4', find: () => existsSync(command) ? command : 'pi' });
+  assert.equal(missing.installs[0].at(-1), `${PACKAGE}@1.4`);
+
+  // Without a series the exact latest version is installed, as before.
+  const plain = packageFixture(t, '1.3.0');
+  const latest = npmMachine({ latest: '1.6.0' });
+  updateLatest({ env: {}, home: plain.root, node, run: latest.run, find: () => plain.command });
+  assert.equal(latest.views[0][2], `${PACKAGE}@latest`);
+  assert.equal(latest.installs[0].at(-1), `${PACKAGE}@1.6.0`);
+});
+
+test('a series update never downgrades a newer Pi and reports a shortfall against the series', t => {
+  const newer = packageFixture(t, '1.6.0');
+  const m = npmMachine({ latest: '1.4.2' });
+  const result = updateLatest({ env: {}, home: newer.root, node, run: m.run, find: () => newer.command, series: '1.4' });
+  assert.equal(result.changed, false);
+  assert.equal(result.version, '1.6.0');
+  assert.equal(m.installs.length, 0);
+
+  const short = packageFixture(t, '1.3.0');
+  const stale = npmMachine({ latest: '1.4.2', install: args => writeInstall(stageOf(args), '1.4.0') });
+  assert.throws(
+    () => updateLatest({ env: {}, home: short.root, node, run: stale.run, find: () => short.command, series: '1.4' }),
+    /Pi 1\.4\.0 仍低于 npm 1\.4 系列最新版 1\.4\.2/,
+  );
+  assert.equal(readFileSync(short.cli, 'utf8'), '1.3.0\n');
 });
 
 test('npm writes only the stage; the existing npm install changes after the staged Pi runs', t => {
@@ -819,6 +884,20 @@ test('updateLatest adds the exact npm latest with Bun or pnpm in their own homes
   assert.equal(pnpmUpdate.env.npm_config_ignore_scripts, undefined);
   assert.equal(pnpmUpdate.env.PNPM_HOME, layout.pnpmHome);
   assert.ok(pnpmUpdate.env.PATH.startsWith(`${join(layout.pnpmHome, 'bin')}:${layout.pnpmHome}:`));
+});
+
+test('Homebrew, Bun and pnpm cannot pin a series: they keep installing what they offer, even when asked for one', t => {
+  const layout = toolLayouts(t);
+  const bun = toolMachine({ latest: '1.6.0' });
+  const bunCommand = join(layout.bunRoot, 'bin/pi');
+  const result = updateLatest({ env: { PATH: '/usr/bin' }, home: layout.root, node, run: bun.run, find: () => bunCommand, series: '1.4' });
+  assert.equal(result.version, '1.6.0');
+  assert.equal(bun.calls.find(call => call.args[1] === 'view').args[2], `${PACKAGE}@latest`);
+  assert.equal(bun.updates()[0].args.at(-1), `${PACKAGE}@1.6.0`);
+
+  const brew = toolMachine({ latest: '1.6.0', stable: '1.5.0', after: '1.5.0' });
+  const brewCommand = join(layout.brewPrefix, 'bin/pi');
+  assert.equal(updateLatest({ env: {}, home: layout.root, node, run: brew.run, find: () => brewCommand, series: '1.4' }).version, '1.5.0');
 });
 
 test('tool updates refuse a prerelease and fail when the tool or the result does', t => {

@@ -6,13 +6,14 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { MIN_PI_VERSION } from "../agent/pi-command.mjs";
 
 const pluginPath = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // Answers the commands the agent sends as a session starts; a prompt ends the way FAKE_PI_TURN says.
 const FAKE_PI = `#!${process.execPath}
 import { createInterface } from "node:readline";
-if (process.argv.includes("--version")) { console.log("1.1.0"); process.exit(0); }
+if (process.argv.includes("--version")) { console.log(${JSON.stringify(MIN_PI_VERSION)}); process.exit(0); }
 const out = record => process.stdout.write(JSON.stringify(record) + "\\n");
 const data = {
   get_state: { model: { provider: "p", id: "m" }, thinkingLevel: "off" },

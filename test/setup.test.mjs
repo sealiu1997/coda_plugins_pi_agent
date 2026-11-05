@@ -9,7 +9,9 @@ import {
   legacyManagedPi,
   managedPi,
   managedPrefix,
+  MIN_PI_VERSION,
   PACKAGE,
+  PI_SERIES,
   VERIFIED_PI_VERSION,
   resolvePiLaunch,
 } from '../agent/pi-command.mjs';
@@ -161,12 +163,21 @@ test('setup cleans a stale committed backup even when follow-latest is off', asy
   assert.deepEqual(m.said, [`已有 Pi 1.4.0 可用：${runtimeCommand}`]);
 });
 
-test('a missing Pi installs npm latest into ~/.local/bin', () => {
+test('a missing Pi installs the verified series into ~/.local/bin', () => {
   const m = machine();
   assert.equal(setup({ env: {}, home, ...m.options, find: () => m.updates.length ? own : 'pi' }), 0);
   assert.equal(m.updates.length, 1);
-  assert.equal(m.said[0], `安装 Pi latest 到 ${own}`);
+  assert.equal(m.updates[0].series, PI_SERIES);
+  assert.equal(m.said[0], `安装 Pi ${PI_SERIES}.x 到 ${own}`);
   assert.equal(m.said.at(-1), `已安装 Pi 1.4.0：${own}`);
+});
+
+test('a missing Pi installs npm latest when follow-latest is on', () => {
+  const m = machine();
+  const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.updateLatest': true }) };
+  assert.equal(setup({ env, home, ...m.options, find: () => m.updates.length ? own : 'pi' }), 0);
+  assert.equal(m.updates[0].series, null);
+  assert.equal(m.said[0], `安装 Pi latest 到 ${own}`);
 });
 
 test('an automatically discovered npm copy below the minimum is upgraded in place', () => {
@@ -176,6 +187,7 @@ test('an automatically discovered npm copy below the minimum is upgraded in plac
   });
   assert.equal(setup({ env: {}, home, ...m.options, find: () => own }), 0);
   assert.equal(m.updates.length, 1);
+  assert.equal(m.updates[0].series, PI_SERIES);
   assert.equal(m.said.at(-1), `已升级到兼容版本 Pi 1.4.0：${own}`);
 });
 
@@ -187,7 +199,7 @@ test('an explicit npm path is protected unless latest policy is enabled', () => 
   const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.commandPath': own }) };
   assert.equal(setup({ env, home, ...old.options, find: () => own }), 1);
   assert.equal(old.updates.length, 0);
-  assert.match(old.said.at(-1), /低于最低版本 1\.1\.0/);
+  assert.match(old.said.at(-1), new RegExp(`低于最低版本 ${MIN_PI_VERSION.replaceAll('.', '\\.')}`));
 
   const latest = machine({
     versions: { [own]: () => ({ status: 0, stdout: '1.2.0\n' }) },
@@ -198,6 +210,7 @@ test('an explicit npm path is protected unless latest policy is enabled', () => 
   };
   assert.equal(setup({ env: latestEnv, home, ...latest.options, find: () => own }), 0);
   assert.equal(latest.updates.length, 1);
+  assert.equal(latest.updates[0].series, null);
   assert.equal(latest.said.at(-1), `已更新到 Pi 1.4.0：${own}`);
 
   const tooOld = machine({
@@ -359,18 +372,18 @@ async function legacyInstall(t, version) {
 }
 
 test('a Pi installed by the 0.3 plugin is found in its real npm prefix and kept', async t => {
-  const legacy = await legacyInstall(t, '1.2.0');
+  const legacy = await legacyInstall(t, MIN_PI_VERSION);
   assert.equal(legacy.find({}, { env: legacy.env, home: legacy.root }), legacy.command);
   assert.equal(setup({ env: legacy.env, home: legacy.root, ...legacy.m.options, find: legacy.find }), 0);
   assert.equal(legacy.m.updates.length, 0);
-  assert.deepEqual(legacy.m.said, [`已有 Pi 1.2.0 可用：${legacy.command}`]);
+  assert.deepEqual(legacy.m.said, [`已有 Pi ${MIN_PI_VERSION} 可用：${legacy.command}`]);
 });
 
 test('a too-old 0.3 plugin copy is updated in its own prefix and verified where it starts', async t => {
   const legacy = await legacyInstall(t, '1.0.9');
   assert.equal(setup({ env: legacy.env, home: legacy.root, ...legacy.m.options, find: legacy.find }), 0);
   assert.equal(legacy.m.updates.length, 1);
-  assert.equal(legacy.m.said[0], `更新 Pi latest 到 ${legacy.prefix}`);
+  assert.equal(legacy.m.said[0], `更新 Pi ${PI_SERIES}.x 到 ${legacy.prefix}`);
   assert.equal(legacy.m.said.at(-1), `已升级到兼容版本 Pi 1.4.0：${legacy.command}`);
 });
 
@@ -401,11 +414,67 @@ test('a failed update of a too-old 0.3 copy fails setup', async t => {
   assert.match(m.said.at(-1), /更新 Pi 失败：migration failed/);
 });
 
+test('a Pi newer than the verified series is used with an unverified note, never refused', () => {
+  const [major, minor] = PI_SERIES.split('.').map(Number);
+  const note = /高于本插件验证过的 \d+\.\d+ 系列，仍可使用但尚未验证/;
+  for (const newer of [`${major}.${minor + 1}.0`, `${major}.${minor + 7}.3`, `${major + 1}.0.0`]) {
+    const m = machine({ versions: { '/usr/local/bin/pi': () => ({ status: 0, stdout: `pi ${newer}\n` }) } });
+    assert.equal(setup({ env: {}, home, ...m.options, find: () => '/usr/local/bin/pi' }), 0);
+    assert.equal(m.updates.length, 0);
+    assert.deepEqual(m.said.slice(0, 1), [`已有 Pi ${newer} 可用：/usr/local/bin/pi`]);
+    assert.equal(m.said.length, 2);
+    assert.match(m.said[1], note);
+    assert.ok(m.said[1].includes(`Pi ${newer}`) && m.said[1].includes(`${PI_SERIES} 系列`) && m.said[1].includes('更新'));
+    assert.ok(m.said.every(line => !line.startsWith('!')));
+  }
+  // Any patch of the verified series is verified: no note.
+  for (const verified of [MIN_PI_VERSION, `${PI_SERIES}.9`]) {
+    const m = machine({ versions: { '/usr/local/bin/pi': () => ({ status: 0, stdout: `${verified}\n` }) } });
+    assert.equal(setup({ env: {}, home, ...m.options, find: () => '/usr/local/bin/pi' }), 0);
+    assert.deepEqual(m.said, [`已有 Pi ${verified} 可用：/usr/local/bin/pi`]);
+  }
+});
+
+test('a newer-than-verified Pi stays usable under follow-latest on a tool-managed install, with the note', () => {
+  const [major, minor] = PI_SERIES.split('.').map(Number);
+  const newer = `${major}.${minor + 1}.0`;
+  const external = '/opt/homebrew/bin/pi';
+  const m = machine({
+    versions: { [external]: () => ({ status: 0, stdout: '1.2.0\n' }) },
+    updateResult: { version: newer, path: external },
+    realpath: path => path === external ? '/opt/homebrew/Cellar/pi-coding-agent/1.2.0/bin/pi' : path,
+  });
+  // Homebrew cannot pin a series: even without follow-latest the tool installs what it offers.
+  assert.equal(setup({ env: {}, home, ...m.options, find: () => external }), 0);
+  assert.equal(m.updates[0].series, null);
+  assert.equal(m.said[0], '更新 Pi latest 到 Homebrew（brew upgrade pi-coding-agent）');
+  assert.equal(m.said[1], `已升级到兼容版本 Pi ${newer}：${external}`);
+  assert.match(m.said[2], /尚未验证/);
+  assert.equal(m.said.length, 3);
+});
+
+test('a failed update that keeps a newer-than-verified Pi still carries the note and succeeds', () => {
+  const [major, minor] = PI_SERIES.split('.').map(Number);
+  const newer = `${major}.${minor + 1}.0`;
+  const external = '/opt/homebrew/bin/pi';
+  const m = machine({
+    versions: { [external]: () => ({ status: 0, stdout: `${newer}\n` }) },
+    updateResult: new Error('npm registry unavailable'),
+    realpath: () => '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
+  });
+  const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.updateLatest': true }) };
+  assert.equal(setup({ env, home, ...m.options, find: () => external }), 0);
+  assert.match(m.said[0], /更新 Pi latest 到/);
+  assert.match(m.said[1], /更新 Pi 失败，继续使用已有的 Pi/);
+  assert.match(m.said[2], /尚未验证/);
+});
+
 test('manifest and minimum-version metadata agree with the managed local runtime', async () => {
   const root = join(import.meta.dirname, '..');
   const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
   const lock = JSON.parse(await readFile(join(root, 'package-lock.json'), 'utf8'));
   assert.equal(manifest.version, '0.5.1');
+  assert.match(manifest.devDependencies[PACKAGE], new RegExp(`^${PI_SERIES.replace('.', '\\.')}\\.\\d+$`));
   assert.equal(manifest.dependencies[PACKAGE], undefined);
   assert.equal(manifest.devDependencies[PACKAGE], VERIFIED_PI_VERSION);
   assert.equal(lock.packages[''].devDependencies[PACKAGE], VERIFIED_PI_VERSION);
@@ -416,6 +485,14 @@ test('manifest and minimum-version metadata agree with the managed local runtime
     'exec "$CODA_NODE" "$CODA_PLUGIN_PATH/agent/setup.mjs"');
   assert.equal(manifest.scripts['check:pi:verified'], 'node scripts/check-pi-compat.mjs --pi ./node_modules/.bin/pi');
   assert.match(manifest.contributes.configuration.properties['pi.commandPath'].description, /PATH.*npm.*Homebrew/);
+  // The series policy is explained where users read it; the follow-latest setting itself stays.
+  const updateLatest = manifest.contributes.configuration.properties['pi.updateLatest'];
+  assert.equal(updateLatest.title, 'Pi 跟随最新版');
+  assert.match(updateLatest.description, /默认跟随插件验证过的系列.*X\.Y.*打开并保存后改为跟随最新版/s);
+  assert.match(manifest.contributes.agents[0].setupHint, /验证过的系列.*X\.Y.*跟随最新版/s);
+  const readme = await readFile(join(root, 'README.md'), 'utf8');
+  assert.match(readme, /版本约定.*X\.Y\.Z.*验证过的 Pi 系列/s);
+  assert.match(readme, /为什么不是「版本号严格等于 Pi 版本」/);
 });
 
 test('resource-page runtime controls remain absent', async () => {

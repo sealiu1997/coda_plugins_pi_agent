@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stopActiveChildren, stopChildren } from "../agent/shutdown.mjs";
+import { MIN_PI_VERSION } from "../agent/pi-command.mjs";
 
 const pluginPath = join(dirname(fileURLToPath(import.meta.url)), "..");
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -17,7 +18,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const INITIALIZING_PI = `#!${process.execPath}
 import { appendFileSync, openSync, writeSync } from "node:fs";
 import { createInterface } from "node:readline";
-if (process.argv.includes("--version")) { console.log("1.1.0"); process.exit(0); }
+if (process.argv.includes("--version")) { console.log(${JSON.stringify(MIN_PI_VERSION)}); process.exit(0); }
 writeSync(openSync(process.env.FAKE_PI_PID_FILE, "w"), String(process.pid));
 process.on("SIGTERM", () => {
   appendFileSync(process.env.FAKE_PI_SIGNALS_FILE, "TERM\\n");
@@ -36,7 +37,7 @@ createInterface({ input: process.stdin }).on("line", line => {
 const FAKE_PI = `#!${process.execPath}
 import { appendFileSync, openSync, writeSync } from "node:fs";
 import { createInterface } from "node:readline";
-if (process.argv.includes("--version")) { console.log("1.1.0"); process.exit(0); }
+if (process.argv.includes("--version")) { console.log(${JSON.stringify(MIN_PI_VERSION)}); process.exit(0); }
 writeSync(openSync(process.env.FAKE_PI_PID_FILE, "w"), String(process.pid));
 process.on("SIGTERM", () => appendFileSync(process.env.FAKE_PI_SIGNALS_FILE, "TERM\\n"));
 const out = record => process.stdout.write(JSON.stringify(record) + "\\n");
