@@ -129,3 +129,35 @@ test("Z.ai usage-limit code 1308 is quota exhaustion, while short-lived 429 thro
     assert.deepEqual(classifyPiFailure(input), expected, `Failed on input: ${input}`);
   }
 });
+
+test("Z.ai 1308 must be a whole code token, and a bare 400/422 carrying it is a request error", () => {
+  const quota = { kind: "quota_exhausted" };
+  const cases = [
+    // The code must not run on into more digits, letters, underscores or a decimal part.
+    { input: '429 {"error":{"code":"1308.0","message":"x"}}', expected: null },
+    { input: '429 {"error":{"code":"1308abc","message":"x"}}', expected: null },
+    { input: '429 {"error":{"code":"1308_x","message":"x"}}', expected: null },
+    { input: "429 code=13080", expected: null },
+    { input: "code=1308.0", expected: null },
+    { input: "code=1308x", expected: null },
+    // 429 keeps it quota, plain or escaped; so does a body with no status at all.
+    { input: '429 {"error":{"code":"1308","message":"x"}}', expected: quota },
+    { input: '429 {\\"error\\":{\\"code\\":\\"1308\\"}}', expected: quota },
+    { input: '{"error":{"code":"1308"}}', expected: quota },
+    { input: "code=1308", expected: quota },
+    // A 400/422 without 429 is validation, not quota; with 429 as well, 429 wins.
+    { input: '400 {"error":{"code":"1308","message":"x"}}', expected: null },
+    { input: '422 {"error":{"code":"1308","message":"x"}}', expected: null },
+    { input: '400 Bad Request {"error":{"code":"1308"}}', expected: null },
+    { input: '400 then 429 {"error":{"code":"1308"}}', expected: quota },
+    // Plain 429 throttling is still an ordinary error.
+    { input: "429 Too Many Requests", expected: null },
+    { input: '429 {"error":{"code":"1302","message":"x"}}', expected: null },
+    // The other quota rules keep their order ahead of the validation exclusion.
+    { input: "400 insufficient_quota", expected: quota },
+    { input: "400 {\"error\":{\"code\":\"1308\",\"message\":\"Usage limit reached for 5 hour\"}}", expected: quota },
+  ];
+  for (const { input, expected } of cases) {
+    assert.deepEqual(classifyPiFailure(input), expected, `Failed on input: ${input}`);
+  }
+});

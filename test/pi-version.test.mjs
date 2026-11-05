@@ -203,3 +203,28 @@ test('the fallback series, the verified Pi version and the plugin manifest all n
   assert.equal(seriesOf(VERIFIED_PI_VERSION), PI_SERIES);
   assert.equal(FALLBACK_PI_SERIES, PI_SERIES);
 });
+
+test('version number segments take no leading zeros: 01.5.0 is not 1.5', async () => {
+  const { readPiSeries, piVersionStatus, supportedVersion, parsePiVersion, versionOf, FALLBACK_PI_SERIES } = await import('../agent/pi-command.mjs');
+  const manifest = version => ({ read: () => JSON.stringify({ version }) });
+  for (const version of ['01.5.0', '1.05.0', '1.5.00', '1.5.01', '00.5.0']) {
+    assert.equal(readPiSeries(manifest(version)), FALLBACK_PI_SERIES, version);
+    assert.equal(piVersionStatus(version, '1.5'), 'unsupported', version);
+    assert.equal(supportedVersion(version), false, version);
+    assert.equal(parsePiVersion(version), null, version);
+    assert.equal(parsePiVersion(`pi ${version}`), null, version);
+    assert.equal(versionOf('/pi', { run: () => ({ status: 0, stdout: version }) }), null, version);
+  }
+  // Ordinary numbers, including multi-digit and zero segments, are unchanged.
+  assert.equal(readPiSeries(manifest('1.5.0')), '1.5');
+  assert.equal(readPiSeries(manifest('1.10.0')), '1.10');
+  assert.equal(readPiSeries(manifest('1.5.12')), '1.5');
+  assert.equal(readPiSeries(manifest('2.0.1')), '2.0');
+  for (const version of ['1.5.0', '1.5.12']) assert.equal(piVersionStatus(version, '1.5'), 'verified');
+  assert.equal(piVersionStatus('1.10.0', '1.5'), 'unverified');
+  assert.equal(piVersionStatus('1.5.0+build', '1.5'), 'verified');
+  assert.equal(parsePiVersion('pi 1.10.0'), '1.10.0');
+  assert.equal(parsePiVersion('v1.5.12'), '1.5.12');
+  assert.equal(parsePiVersion('1.5.0-beta.1'), '1.5.0-beta.1');
+  assert.equal(versionOf('/pi', { run: () => ({ status: 0, stdout: 'pi 1.5.12' }) }), '1.5.12');
+});

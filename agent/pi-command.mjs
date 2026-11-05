@@ -20,7 +20,7 @@ export function readPiSeries({
   url = new URL('../package.json', import.meta.url),
 } = {}) {
   try {
-    const parts = /^(\d+)\.(\d+)\.\d+(?:[-+][\w.+-]+)?$/.exec(JSON.parse(read(url, 'utf8')).version);
+    const parts = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:[-+][\w.+-]+)?$/.exec(JSON.parse(read(url, 'utf8')).version);
     if (parts) {
       const [major, minor] = [Number(parts[1]), Number(parts[2])];
       if (major > SERIES_FLOOR[0] || (major === SERIES_FLOOR[0] && minor >= SERIES_FLOOR[1])) {
@@ -38,14 +38,14 @@ export const MIN_PI_VERSION = `${PI_SERIES}.0`;
 export const VERIFIED_PI_VERSION = '1.5.0';
 
 export const parsePiVersion = output => {
-  const match = String(output ?? '').match(/\bv?(\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?)\b/);
+  const match = String(output ?? '').match(/\bv?((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[\w.-]+)?(?:\+[\w.-]+)?)\b/);
   return match?.[1] ?? null;
 };
 
 // 'unsupported' is below the series floor (or not a plain release), 'verified' is the series
 // this plugin was checked against, 'unverified' is a newer series that still runs.
 export function piVersionStatus(version, series = PI_SERIES) {
-  const parts = /^(\d+)\.(\d+)\.(\d+)(?:\+[^ ]+)?$/.exec(version ?? '');
+  const parts = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[^ ]+)?$/.exec(version ?? '');
   if (!parts) return 'unsupported';
   const [major, minor] = series.split('.').map(Number);
   const [vMajor, vMinor] = [Number(parts[1]), Number(parts[2])];

@@ -25,7 +25,7 @@
           "${PI_CODING_AGENT_DIR:-~/.pi/agent}/settings.json",
           "${PI_CODING_AGENT_DIR:-~/.pi/agent}/models.json"
         ],
-        "setupHint": "插件会接管这台机器已有的 Pi；未安装或低于插件验证过的系列时，自动安装该系列（插件版本号前两段 X.Y）的最新补丁到 ~/.local/bin，新于该系列的 Pi 照常使用。在设置中打开「Pi 跟随最新版」并保存可更新到最新版。装不上时在插件页重试准备运行环境"
+        "setupHint": "插件会接管这台机器已有的 Pi，没装时自动安装插件验证过的系列（版本号前两段 X.Y），新于该系列的 Pi 照常使用；各安装方式如何升级见设置「Pi 跟随最新版」的说明。装不上时在插件页重试准备运行环境"
       }
     ],
     "configuration": {
