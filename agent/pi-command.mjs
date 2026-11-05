@@ -181,8 +181,8 @@ export function resolvePiLaunch(settings = {}, options = {}) {
 export function assertPiVersion(version, launch) {
   if (!supportedVersion(version)) {
     throw new Error(
-      `Pi ${version ?? '版本未知'}（${launchLabel(launch)}）不满足最低版本 ${MIN_PI_VERSION}。`
-      + '请在插件设置中打开「Pi 跟随最新版」并保存，或使用原来的安装工具升级。',
+      `Pi ${version ?? '版本未知'}（${launchLabel(launch)}）不满足最低版本 ${MIN_PI_VERSION}（需要该版本或更新的稳定版）。`
+      + '请用原来的安装工具升级，或在 pi.commandPath 里指向受支持的 Pi。',
     );
   }
   return version;

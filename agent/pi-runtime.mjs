@@ -805,9 +805,9 @@ function updateWithTool(before, { env, home, node, run, realpath }) {
   };
 }
 
-// Brings Pi to npm latest, or with `series` (e.g. "1.5") to the newest patch of that series.
-// Homebrew, Bun and pnpm cannot pin a series, so they keep updating to what their tool offers.
-export function updateLatest({
+// Brings Pi to the newest patch of `series` (e.g. "1.5") through npm, or to what the installing
+// tool offers for Homebrew, Bun and pnpm, which cannot pin a series. Without `series` npm's latest.
+export function updatePi({
   env = process.env,
   home = homedir(),
   node = process.execPath,

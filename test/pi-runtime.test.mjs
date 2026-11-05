@@ -30,7 +30,7 @@ import {
   recoverInterruptedInstallation,
   recoverPendingInstallation,
   runtimeOwner,
-  updateLatest,
+  updatePi,
   wrapperTarget,
 } from '../agent/pi-runtime.mjs';
 
@@ -326,14 +326,14 @@ test('inspectRuntime reports a missing, current or outdated runtime', () => {
   assert.equal(old.updateAvailable, true);
 });
 
-test('updateLatest installs into ~/.local for a missing Pi through a stage', t => {
+test('updatePi installs into ~/.local for a missing Pi through a stage', t => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'pi-missing-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const prefix = managedPrefix({}, root);
   const command = managedPi({}, root);
   const m = npmMachine();
 
-  const result = updateLatest({
+  const result = updatePi({
     env: {},
     home: root,
     node,
@@ -357,7 +357,7 @@ test('updateLatest installs into ~/.local for a missing Pi through a stage', t =
 test('a series installs as @X.Y so npm resolves its newest patch, and the result is checked against it', t => {
   const fixture = packageFixture(t, '1.4.0');
   const m = npmMachine({ latest: '1.5.2' });
-  const result = updateLatest({ env: {}, home: fixture.root, node, run: m.run, find: () => fixture.command, series: '1.5' });
+  const result = updatePi({ env: {}, home: fixture.root, node, run: m.run, find: () => fixture.command, series: '1.5' });
   assert.equal(result.version, '1.5.2');
   assert.equal(result.latest, '1.5.2');
   assert.equal(m.views[0][2], `${PACKAGE}@1.5`);
@@ -369,13 +369,13 @@ test('a series installs as @X.Y so npm resolves its newest patch, and the result
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const command = managedPi({}, root);
   const missing = npmMachine({ latest: '1.5.2' });
-  updateLatest({ env: {}, home: root, node, run: missing.run, series: '1.5', find: () => existsSync(command) ? command : 'pi' });
+  updatePi({ env: {}, home: root, node, run: missing.run, series: '1.5', find: () => existsSync(command) ? command : 'pi' });
   assert.equal(missing.installs[0].at(-1), `${PACKAGE}@1.5`);
 
   // Without a series the exact latest version is installed, as before.
   const plain = packageFixture(t, '1.4.0');
   const latest = npmMachine({ latest: '1.6.0' });
-  updateLatest({ env: {}, home: plain.root, node, run: latest.run, find: () => plain.command });
+  updatePi({ env: {}, home: plain.root, node, run: latest.run, find: () => plain.command });
   assert.equal(latest.views[0][2], `${PACKAGE}@latest`);
   assert.equal(latest.installs[0].at(-1), `${PACKAGE}@1.6.0`);
 });
@@ -383,7 +383,7 @@ test('a series installs as @X.Y so npm resolves its newest patch, and the result
 test('a series update never downgrades a newer Pi and reports a shortfall against the series', t => {
   const newer = packageFixture(t, '1.6.0');
   const m = npmMachine({ latest: '1.5.2' });
-  const result = updateLatest({ env: {}, home: newer.root, node, run: m.run, find: () => newer.command, series: '1.5' });
+  const result = updatePi({ env: {}, home: newer.root, node, run: m.run, find: () => newer.command, series: '1.5' });
   assert.equal(result.changed, false);
   assert.equal(result.version, '1.6.0');
   assert.equal(m.installs.length, 0);
@@ -391,7 +391,7 @@ test('a series update never downgrades a newer Pi and reports a shortfall agains
   const short = packageFixture(t, '1.4.0');
   const stale = npmMachine({ latest: '1.5.2', install: args => writeInstall(stageOf(args), '1.5.0') });
   assert.throws(
-    () => updateLatest({ env: {}, home: short.root, node, run: stale.run, find: () => short.command, series: '1.5' }),
+    () => updatePi({ env: {}, home: short.root, node, run: stale.run, find: () => short.command, series: '1.5' }),
     /Pi 1\.5\.0 仍低于 npm 1\.5 系列最新版 1\.5\.2/,
   );
   assert.equal(readFileSync(short.cli, 'utf8'), '1.4.0\n');
@@ -407,7 +407,7 @@ test('npm writes only the stage; the existing npm install changes after the stag
     },
   });
 
-  const result = updateLatest({ env: {}, home: fixture.root, node, run: m.run, find: () => fixture.command });
+  const result = updatePi({ env: {}, home: fixture.root, node, run: m.run, find: () => fixture.command });
   assert.equal(result.version, '1.5.0');
   assert.equal(result.prefix, fixture.prefix);
   assert.equal(readFileSync(fixture.cli, 'utf8'), '1.5.0\n');
@@ -425,17 +425,17 @@ test('a Pi installed by the 0.3 plugin is updated in its own prefix under plugin
   assert.equal(command, join(prefix, 'bin/pi'));
   assert.deepEqual(runtimeOwner(command, { env, home: root }).prefix, prefix);
 
-  const result = updateLatest({ env, home: root, node, run: npmMachine().run, find: () => command });
+  const result = updatePi({ env, home: root, node, run: npmMachine().run, find: () => command });
   assert.equal(result.path, command);
   assert.equal(result.prefix, prefix);
   assert.equal(readFileSync(command, 'utf8'), '1.5.0\n');
   assert.equal(existsSync(managedPrefix(env, root)), false);
 });
 
-test('updateLatest skips npm when the installed Pi is already latest', () => {
+test('updatePi skips npm when the installed Pi is already latest', () => {
   const m = runFor({ installedVersion: '1.5.0' });
   const external = '/opt/homebrew/bin/pi';
-  const result = updateLatest({
+  const result = updatePi({
     env: {},
     home,
     node,
@@ -449,9 +449,9 @@ test('updateLatest skips npm when the installed Pi is already latest', () => {
   assert.equal(m.ran.some(args => args[2] === 'install'), false);
 });
 
-test('updateLatest refuses custom installers before contacting npm', () => {
+test('updatePi refuses custom installers before contacting npm', () => {
   const custom = runFor({ commandVersions: { '/custom/pi': () => ({ status: 0, stdout: '1.5.0' }) } });
-  assert.throws(() => updateLatest({
+  assert.throws(() => updatePi({
     env: {}, home, node, run: custom.run, find: () => '/custom/pi', realpath: () => '/custom/pi',
   }), /无法自动升级/);
   assert.equal(custom.ran.some(args => args[2] === 'install'), false);
@@ -476,7 +476,7 @@ test('stage failures leave the existing installation untouched', async t => {
     await t.test(name, t => {
       const fixture = packageFixture(t);
       const m = npmMachine(options);
-      assert.throws(() => updateLatest({
+      assert.throws(() => updatePi({
         env: {}, home: fixture.root, node, run: m.run, find: () => fixture.command,
       }), error);
       assert.equal(m.installs.length, 1);
@@ -496,7 +496,7 @@ test('a committed install that fails verification is rolled back', t => {
       : null,
   });
 
-  assert.throws(() => updateLatest({
+  assert.throws(() => updatePi({
     env: {}, home: fixture.root, node, run: m.run, find: () => fixture.command,
   }), /无法运行/);
   assert.equal(readFileSync(fixture.cli, 'utf8'), '1.2.0\n');
@@ -517,7 +517,7 @@ test('a failed rollback is reported as RollbackError and keeps the backup', t =>
     },
   });
 
-  assert.throws(() => updateLatest({
+  assert.throws(() => updatePi({
     env: {}, home: fixture.root, node, run: m.run, find: () => fixture.command,
   }), error => error instanceof RollbackError && /恢复原 Pi 安装失败/.test(error.message));
   const backups = leftovers(fixture.prefix).filter(name => name.startsWith(backupName));
@@ -617,7 +617,7 @@ test('a failed recovery keeps the backup and stops the update with RollbackError
 
   const external = join(root, 'external-pi');
   const m = runFor({ installedVersion: '1.2.0' });
-  assert.throws(() => updateLatest({
+  assert.throws(() => updatePi({
     env: {},
     home: root,
     node,
@@ -634,7 +634,7 @@ test('an active update lock prevents a concurrent npm install', t => {
   holdLock(fixture.prefix, process.pid);
   const m = npmMachine();
 
-  assert.throws(() => updateLatest({
+  assert.throws(() => updatePi({
     env: {}, home: fixture.root, node, run: m.run, find: () => fixture.command,
   }), /另一个 Pi 更新正在进行/);
   assert.equal(m.installs.length, 0);
@@ -726,7 +726,7 @@ test('setup recovery leaves an active update lock, owner and record intact', t =
   assert.equal(readFileSync(record, 'utf8'), recordContents);
 });
 
-test('updateLatest upgrades the npm installation behind a recognized shell wrapper', t => {
+test('updatePi upgrades the npm installation behind a recognized shell wrapper', t => {
   const fixture = packageFixture(t);
   const wrapper = join(fixture.root, 'wrapper-pi');
   writeFileSync(wrapper, [
@@ -737,7 +737,7 @@ test('updateLatest upgrades the npm installation behind a recognized shell wrapp
   ].join('\n'));
   const m = npmMachine({ aliases: { [wrapper]: fixture.command } });
 
-  const result = updateLatest({
+  const result = updatePi({
     env: {},
     home: fixture.root,
     node,
@@ -844,11 +844,11 @@ function toolMachine({ owner, latest = '1.5.0', stable = latest, before = '1.2.0
   return { calls, run, updates: () => calls.filter(call => ['upgrade', 'add'].includes(call.args[0])) };
 }
 
-test('updateLatest upgrades a Homebrew formula with brew, to the version Homebrew offers', t => {
+test('updatePi upgrades a Homebrew formula with brew, to the version Homebrew offers', t => {
   const layout = toolLayouts(t);
   const command = join(layout.brewPrefix, 'bin/pi');
   const m = toolMachine({ latest: '1.6.0', stable: '1.5.0', after: '1.5.0' });
-  const result = updateLatest({ env: { PATH: '/usr/bin' }, home: layout.root, node, run: m.run, find: () => command });
+  const result = updatePi({ env: { PATH: '/usr/bin' }, home: layout.root, node, run: m.run, find: () => command });
   assert.equal(result.version, '1.5.0');
   assert.equal(result.latest, '1.5.0');
   assert.equal(result.changed, true);
@@ -858,15 +858,15 @@ test('updateLatest upgrades a Homebrew formula with brew, to the version Homebre
   ]);
 
   const current = toolMachine({ before: '1.5.0' });
-  assert.equal(updateLatest({ env: {}, home: layout.root, node, run: current.run, find: () => command }).changed, false);
+  assert.equal(updatePi({ env: {}, home: layout.root, node, run: current.run, find: () => command }).changed, false);
   assert.equal(current.updates().length, 0);
 });
 
-test('updateLatest adds the exact npm latest with Bun or pnpm in their own homes', t => {
+test('updatePi adds the exact npm latest with Bun or pnpm in their own homes', t => {
   const layout = toolLayouts(t);
   const bun = toolMachine({});
   const bunCommand = join(layout.bunRoot, 'bin/pi');
-  assert.equal(updateLatest({ env: { PATH: '/usr/bin' }, home: layout.root, node, run: bun.run, find: () => bunCommand }).version, '1.5.0');
+  assert.equal(updatePi({ env: { PATH: '/usr/bin' }, home: layout.root, node, run: bun.run, find: () => bunCommand }).version, '1.5.0');
   const [bunUpdate] = bun.updates();
   assert.deepEqual([bunUpdate.command, ...bunUpdate.args], ['bun', 'add', '--global', `${PACKAGE}@1.5.0`]);
   assert.equal(bunUpdate.env.BUN_INSTALL, layout.bunRoot);
@@ -875,7 +875,7 @@ test('updateLatest adds the exact npm latest with Bun or pnpm in their own homes
   writeFileSync(join(layout.pnpmHome, 'pnpm'), '#!/bin/sh\n', { mode: 0o755 });
   const pnpm = toolMachine({});
   const pnpmCommand = join(layout.pnpmHome, 'bin/pi');
-  assert.equal(updateLatest({ env: { PATH: '/usr/bin' }, home: layout.root, node, run: pnpm.run, find: () => pnpmCommand }).version, '1.5.0');
+  assert.equal(updatePi({ env: { PATH: '/usr/bin' }, home: layout.root, node, run: pnpm.run, find: () => pnpmCommand }).version, '1.5.0');
   const [pnpmUpdate] = pnpm.updates();
   assert.deepEqual([pnpmUpdate.command, ...pnpmUpdate.args],
     [join(layout.pnpmHome, 'pnpm'), 'add', '--global', `${PACKAGE}@1.5.0`]);
@@ -890,20 +890,20 @@ test('Homebrew, Bun and pnpm cannot pin a series: they keep installing what they
   const layout = toolLayouts(t);
   const bun = toolMachine({ latest: '1.6.0' });
   const bunCommand = join(layout.bunRoot, 'bin/pi');
-  const result = updateLatest({ env: { PATH: '/usr/bin' }, home: layout.root, node, run: bun.run, find: () => bunCommand, series: '1.4' });
+  const result = updatePi({ env: { PATH: '/usr/bin' }, home: layout.root, node, run: bun.run, find: () => bunCommand, series: '1.4' });
   assert.equal(result.version, '1.6.0');
   assert.equal(bun.calls.find(call => call.args[1] === 'view').args[2], `${PACKAGE}@latest`);
   assert.equal(bun.updates()[0].args.at(-1), `${PACKAGE}@1.6.0`);
 
   const brew = toolMachine({ latest: '1.6.0', stable: '1.5.0', after: '1.5.0' });
   const brewCommand = join(layout.brewPrefix, 'bin/pi');
-  assert.equal(updateLatest({ env: {}, home: layout.root, node, run: brew.run, find: () => brewCommand, series: '1.4' }).version, '1.5.0');
+  assert.equal(updatePi({ env: {}, home: layout.root, node, run: brew.run, find: () => brewCommand, series: '1.4' }).version, '1.5.0');
 });
 
 test('tool updates refuse a prerelease and fail when the tool or the result does', t => {
   const layout = toolLayouts(t);
   const command = join(layout.bunRoot, 'bin/pi');
-  const update = m => () => updateLatest({ env: {}, home: layout.root, node, run: m.run, find: () => command });
+  const update = m => () => updatePi({ env: {}, home: layout.root, node, run: m.run, find: () => command });
 
   const prerelease = toolMachine({ latest: '1.6.0-beta.1' });
   assert.throws(update(prerelease), /1\.6\.0-beta\.1 不是当前插件支持的稳定版本，未更新/);
@@ -921,7 +921,7 @@ test('a pnpm 11 install group is re-added whole, keeping its other tools at thei
   mkdirSync(join(layout.pnpmGroup, 'node_modules/semver'), { recursive: true });
   writeFileSync(join(layout.pnpmGroup, 'node_modules/semver/package.json'), JSON.stringify({ version: '7.8.5' }));
   const command = join(layout.pnpmHome, 'bin/pi');
-  const update = m => updateLatest({ env: {}, home: layout.root, node, run: m.run, find: () => command });
+  const update = m => updatePi({ env: {}, home: layout.root, node, run: m.run, find: () => command });
 
   const m = toolMachine({});
   assert.equal(update(m).version, '1.5.0');
@@ -946,6 +946,6 @@ test('a pre-11 shared pnpm global directory updates Pi alone', t => {
   assert.equal(owner.kind, 'pnpm');
   assert.equal(owner.group, undefined);
   const m = toolMachine({});
-  updateLatest({ env: {}, home: root, node, run: m.run, find: () => join(root, 'pi') });
+  updatePi({ env: {}, home: root, node, run: m.run, find: () => join(root, 'pi') });
   assert.equal(m.updates()[0].args.at(-1), `${PACKAGE}@1.5.0`);
 });
