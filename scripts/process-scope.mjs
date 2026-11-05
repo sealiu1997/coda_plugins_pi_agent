@@ -2,6 +2,11 @@
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 
+// Codes for "no process is left in this group to signal". The groups are only ever ones this scope spawned
+// (detached, signalled by child.pid). macOS answers EPERM instead of ESRCH once every member has exited and only
+// zombies or an exited leader remain, so both mean the group is gone; other codes (EINVAL, ...) still throw.
+const GONE = new Set(['ESRCH', 'EPERM']);
+
 export class ProcessScope {
   constructor() { this.children = new Set(); this.controller = new AbortController(); }
   listen() {
@@ -22,12 +27,12 @@ export class ProcessScope {
     try {
       if (entry.child.pid !== undefined) process.kill(-entry.child.pid, signal);
       else if (!entry.closed) entry.child.kill(signal); // injected test child
-    } catch (e) { if (e.code !== 'ESRCH') throw new Error(`进程组清理失败：${e.message}`); }
+    } catch (e) { if (!GONE.has(e.code)) throw new Error(`进程组清理失败：${e.message}`); }
   }
   alive(entry) {
     if (entry.child.pid === undefined) return !entry.closed;
     try { process.kill(-entry.child.pid, 0); return true; }
-    catch (e) { if (e.code === 'ESRCH') return false; throw e; }
+    catch (e) { if (GONE.has(e.code)) return false; throw e; }
   }
   async stop(entry) {
     this.signal(entry, 'SIGTERM');

@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from 'no
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ProcessScope, minimalEnv } from '../scripts/process-scope.mjs';
 const temporary=t=>{const dir=mkdtempSync(join(tmpdir(),'pi-process-test-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));return dir;};
@@ -90,4 +91,58 @@ test('real npm install cannot execute a lifecycle script with ignore-scripts', a
     assert.equal(existsSync(sentinel),false);
     assert.ok(existsSync(join(target,'node_modules/fake-lifecycle-package/package.json')));
   } finally { await scope.cleanup(); }
+});
+
+// A tracked child that is only a pid: process.kill is replaced so the group answers the way the test needs.
+function fakeGroup(t, kill) {
+  const child = Object.assign(new EventEmitter(), { pid: 424242 });
+  const calls = [];
+  t.mock.method(process, 'kill', (pid, signal) => { calls.push([pid, signal]); return kill(signal, calls); });
+  const scope = new ProcessScope(), entry = scope.track(child, 60);
+  return { child, calls, scope, entry };
+}
+const errno = code => Object.assign(new Error(`kill ${code}`), { code });
+
+test('a process group that answers EPERM (macOS, only zombies left) is gone: signal ignores it, alive is false', t => {
+  const { scope, entry, calls } = fakeGroup(t, () => { throw errno('EPERM'); });
+  assert.doesNotThrow(() => scope.signal(entry, 'SIGTERM'));
+  assert.doesNotThrow(() => scope.signal(entry, 'SIGKILL'));
+  assert.equal(scope.alive(entry), false);
+  assert.deepEqual(calls.map(([pid]) => pid), [-424242, -424242, -424242]);
+});
+
+test('ESRCH is still treated as gone, while other errors such as EINVAL are not swallowed', t => {
+  const gone = fakeGroup(t, () => { throw errno('ESRCH'); });
+  assert.doesNotThrow(() => gone.scope.signal(gone.entry, 'SIGTERM'));
+  assert.equal(gone.scope.alive(gone.entry), false);
+  t.mock.restoreAll();
+  const bad = fakeGroup(t, () => { throw errno('EINVAL'); });
+  assert.throws(() => bad.scope.signal(bad.entry, 'SIGTERM'), /进程组清理失败：kill EINVAL/);
+  assert.throws(() => bad.scope.alive(bad.entry), /kill EINVAL/);
+});
+
+test('stop finishes TERM, wait, KILL cleanly when the group turns EPERM mid-way, and reports no failure', async t => {
+  let killed = false;
+  const { child, scope, entry, calls } = fakeGroup(t, signal => {
+    if (signal === 'SIGKILL') { killed = true; setImmediate(() => child.emit('close', null, 'SIGKILL')); throw errno('EPERM'); }
+    if (killed) throw errno('EPERM');
+    return true; // TERM is delivered and the group stays alive until KILL
+  });
+  await scope.stop(entry);
+  assert.deepEqual(calls.filter(([, s]) => s !== 0).map(([, s]) => s), ['SIGTERM', 'SIGKILL']);
+  assert.equal(scope.children.size, 0);
+  await assert.doesNotReject(scope.cleanup());
+
+  // The group is already EPERM at the first TERM: no KILL is needed and cleanup still succeeds.
+  t.mock.restoreAll();
+  const early = fakeGroup(t, () => { throw errno('EPERM'); });
+  setImmediate(() => early.child.emit('close', 0, null));
+  await early.scope.stop(early.entry);
+  assert.deepEqual(early.calls.filter(([, s]) => s !== 0).map(([, s]) => s), ['SIGTERM']);
+  await assert.doesNotReject(early.scope.cleanup());
+});
+
+test('cleanup still fails the check when the group error is neither gone nor EPERM', async t => {
+  const { scope } = fakeGroup(t, () => { throw errno('EINVAL'); });
+  await assert.rejects(scope.cleanup(), /进程组清理失败：kill EINVAL/);
 });
