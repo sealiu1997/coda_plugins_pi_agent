@@ -13,7 +13,7 @@
   - 想用新于验证系列的 Pi，等插件跟进新系列；你自己升级 Pi 时插件只提示「尚未验证」，不阻止。
   - 为什么不是「版本号严格等于 Pi 版本」：插件自己的修复没有版本号可用——Coda 比较版本时忽略 `+build`，npm 也会规整掉它，`-pre` 又排在正式版之前，所以第三段留给插件自己的补丁号。
 - 插件只在缺失或低于验证系列时处理 Pi：缺失或插件管理的安装装验证系列的最新补丁，npm 安装在原 prefix 原地升级，Homebrew、Bun、pnpm 按各自工具给出的版本，无法识别来源的自定义安装升不了，会报错并提示用原来的安装工具升级。没有「跟随最新版」开关（1.5.0 曾有，1.5.1 起移除）：想用新于验证系列的 Pi，等插件跟进新系列；你自己升级 Pi 时插件只提示「尚未验证」，不阻止。
-- 自定义脚本、独立下载等无法识别来源的安装会被接管和验证，但不会被静默覆盖。需要由插件自动更新时，应使用 npm、Homebrew、Bun 或 pnpm 安装，或用 `pi.commandPath` 明确指向这样一个安装。
+- 自定义脚本、独立下载等无法识别来源的安装，以及显式 `pi.commandPath` 指向的 Pi，会被接管和验证，但插件不会改动它们：显式路径是你自己的选择，低于最低版本时 setup 只会失败并给出指引。要让插件自动升级，请把 `pi.commandPath` 留为 `pi`，让它发现并接管 npm、Homebrew、Bun 或 pnpm 的安装。
 - 还要在 Coda 里添加 provider（见下），或在 pi 里完成登录。
 - Node 由 Coda 提供（`$CODA_NODE`）。Pi 是独立的本机安装；Pi 1.5.0 和 Coda 官方检查器只作为开发、CI 与兼容扫描的 devDependency。
 - 直接使用本机 Pi 的配置、登录、扩展与会话目录（`$PI_CODING_AGENT_DIR`，默认 `~/.pi/agent`），插件不复制也不改写它们；Coda 里开的会话也能在 `pi --resume` 里看到。
@@ -111,17 +111,17 @@ node scripts/check-pi-compat.mjs --accept
 - 已有 Pi 且版本达标：直接使用，不改版本。
 - 没有 Pi：安装插件验证过的系列（`@X.Y`，该系列最新补丁）到 `~/.local`。
 - 已有 Pi 新于验证过的系列：照常使用，输出「尚未验证」提示，不降级。
-- 自动发现的 npm 全局 Pi 低于最低版本：在它原来的 npm prefix 中升级到验证过的系列。Homebrew、Bun、pnpm 无法钉系列，沿用它们各自的做法，装完核对版本在不在 `X.Y.*`，不在就按「尚未验证」提示，不回滚、不报错。
+- 自动发现的 npm 全局 Pi 低于最低版本：在它原来的 npm prefix 中升级到验证过的系列。Homebrew、Bun、pnpm 无法钉系列，沿用它们各自的做法，装完核对实际启动的 Pi：高于验证系列就提示「尚未验证」，不回滚；低于最低版本或不是受支持的稳定版（预发布版）则失败，同样不回滚。
 - 低于最低版本、来源可识别且不是显式 `pi.commandPath` 指定的 Pi，按安装来源升级：
   - npm 全局安装（含 Homebrew 的 Node、nvm、fnm、asdf 下的）与插件安装到 `~/.local` 的：在原 npm prefix 中升级到验证系列的最新补丁（见下面的 stage 与事务）。
-  - Homebrew 软件包 `pi-coding-agent`：运行 `brew upgrade pi-coding-agent`，升级到 Homebrew 提供的版本（可能不在验证系列内，那就只提示「尚未验证」；按 Homebrew 的规则，过旧的依赖如 `node` 会一起升级）。
-  - Bun 全局安装：在它的 `BUN_INSTALL` 中运行 `bun add --global @earendil-works/pi-coding-agent@<npm latest>`，装完核对版本，不在验证系列内就提示「尚未验证」、不回滚。
-  - pnpm 全局安装：在它的 `PNPM_HOME` 中运行 `pnpm add --global @earendil-works/pi-coding-agent@<npm latest>`，装完核对版本，不在验证系列内就提示「尚未验证」、不回滚。pnpm 11 添加一个包会替换包含它的整个安装组，所以 Pi 与其他工具同组（`pnpm add -g a,b`）时，其他成员按已安装的版本（`file:`、git 等按原写法）一起重装，不会被删掉。构建脚本按用户自己的 pnpm 策略处理：用户批准过的（`allowBuilds`）照常重建，其余仍按 pnpm 默认被拦下，插件不另加 `ignore-scripts`。
-  - Homebrew、Bun、pnpm 的安装由它们自己替换，插件不搬动它们管理的文件，也就没有插件自己的回滚：目标版本不是插件支持的稳定版时不更新，更新后重新验证实际启动的 Pi。
+  - Homebrew 软件包 `pi-coding-agent`：运行 `brew upgrade pi-coding-agent`，升级到 Homebrew 提供的版本（可能高于验证系列，那就提示「尚未验证」；Homebrew 给出的版本低于最低版本则失败；按 Homebrew 的规则，过旧的依赖如 `node` 会一起升级）。
+  - Bun 全局安装：在它的 `BUN_INSTALL` 中运行 `bun add --global @earendil-works/pi-coding-agent@<npm latest>`，装完核对版本，规则同上。
+  - pnpm 全局安装：在它的 `PNPM_HOME` 中运行 `pnpm add --global @earendil-works/pi-coding-agent@<npm latest>`，装完核对版本，规则同上。pnpm 11 添加一个包会替换包含它的整个安装组，所以 Pi 与其他工具同组（`pnpm add -g a,b`）时，其他成员按已安装的版本（`file:`、git 等按原写法）一起重装，不会被删掉。构建脚本按用户自己的 pnpm 策略处理：用户批准过的（`allowBuilds`）照常重建，其余仍按 pnpm 默认被拦下，插件不另加 `ignore-scripts`。
+  - Homebrew、Bun、pnpm 的安装由它们自己替换，插件不搬动它们管理的文件，也就没有插件自己的回滚：目标版本（Homebrew 提供的，或 npm latest）不是插件支持的稳定版时不更新、直接失败；更新后重新验证实际启动的 Pi，装出的版本低于目标版本、低于最低版本或不是受支持的稳定版也算失败（高于验证系列只提示「尚未验证」）。
 - 更新失败时，若重新探测发现已有的 Pi 已达到最低版本，就继续使用它；否则准备环境失败。
 - npm 只安装到同一 prefix 下的临时 stage，暂存的 Pi 能运行、不低于目标系列的最新补丁、不是预发布版之后，才由准备环境进程把旧 package 与命令入口移到备份、换入新版本，并再次验证；失败时恢复旧安装。准备环境中途被终止时，仍在运行的 npm 只能写 stage，不会改动正式安装。
 - 更新锁是 prefix 下只含一个 `owner-<pid>-<token>` 条目的目录，接管陈旧锁时只重命名那个确切条目，并发回收不会夺走别人新取得的锁。事务清单与插件状态目录里的外部 prefix 记录让命令入口已移走后中断的更新也能在下次准备环境时恢复；恢复失败时准备环境报失败，不按更新前的版本当作仍可用。
-- 自定义脚本、独立下载或无法识别安装来源的 Pi：可以接管，但不会覆盖；要让插件自动升级时请改用 npm、Homebrew、Bun 或 pnpm 安装，或把 `pi.commandPath` 留为 `pi`。
+- 自定义脚本、独立下载或无法识别安装来源的 Pi：可以接管，但不会覆盖；要让插件自动升级时请改用 npm、Homebrew、Bun 或 pnpm 安装（`pi.commandPath` 留为 `pi`，由插件发现并接管）；显式 `pi.commandPath` 指向的 Pi 同样不会被改动。
 
 Coda 官方 Claude SDK 和 Codex 插件把各自的 SDK/CLI 锁在插件依赖里，更新时在插件页检查和更新整个插件。Pi 插件按你的要求改成管理机器上的 Pi；Pi 插件本体的版本仍由 Coda 插件商店的「检查更新 / 更新」机制管理。更新 Pi 不会主动结束正在运行的会话，新启动的 Pi 进程使用更新后的版本。
 

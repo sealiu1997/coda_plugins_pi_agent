@@ -176,43 +176,49 @@ test('a leftover pi.updateLatest value is ignored: setup behaves exactly as with
   const external = '/opt/homebrew/bin/pi';
   const npmGlobal = '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js';
   const scenarios = [
-    ['missing', { find: m => m.updates.length ? own : 'pi' }],
-    ['in the series', {
+    ['missing', 0, { find: m => m.updates.length ? own : 'pi' }],
+    ['in the series', 0, {
       versions: { [external]: () => ({ status: 0, stdout: `${MIN_PI_VERSION}\n` }) },
       realpath: () => npmGlobal,
       find: () => external,
     }],
-    ['below the series, npm', {
+    ['below the series, npm', 0, {
       versions: { [external]: () => ({ status: 0, stdout: '1.2.0\n' }) },
       updateResult: { version: '1.5.0', path: external },
       realpath: () => npmGlobal,
       find: () => external,
     }],
-    ['below the series, custom', {
+    ['below the series, custom', 1, {
       versions: { '/custom/pi': () => ({ status: 0, stdout: '1.2.0\n' }) },
       find: () => '/custom/pi',
     }],
-    ['below the series, explicit path', {
+    ['below the series, explicit path', 1, {
       versions: { [external]: () => ({ status: 0, stdout: '1.2.0\n' }) },
       realpath: () => npmGlobal,
       settings: { 'pi.commandPath': external },
       find: () => external,
     }],
   ];
-  for (const [name, { find, settings = {}, ...machineOptions }] of scenarios) {
-    const outcome = stored => {
-      const m = machine(machineOptions);
-      const env = { CODA_PLUGIN_SETTINGS: JSON.stringify(stored ? { ...settings, 'pi.updateLatest': true } : settings) };
-      const code = setup({ env, home, ...m.options, find: () => find(m) });
-      return { code, said: m.said, series: m.updates.map(update => update.series), ran: m.ran };
-    };
-    assert.deepEqual(outcome(true), outcome(false), name);
+  const outcome = (machineOptions, find, pluginSettings) => {
+    const m = machine(machineOptions);
+    const env = pluginSettings === undefined ? {} : { CODA_PLUGIN_SETTINGS: pluginSettings };
+    const code = setup({ env, home, ...m.options, find: () => find(m) });
+    return { code, said: m.said, series: m.updates.map(update => update.series), ran: m.ran };
+  };
+  for (const [name, code, { find, settings = {}, ...machineOptions }] of scenarios) {
+    const baseline = outcome(machineOptions, find, JSON.stringify(settings));
+    assert.equal(baseline.code, code, name);
+    assert.ok(baseline.said.length > 0, name);
+    for (const stored of [true, false, 'true', 'yes', 1, null]) {
+      const given = outcome(machineOptions, find, JSON.stringify({ ...settings, 'pi.updateLatest': stored }));
+      assert.deepEqual(given, baseline, `${name}: pi.updateLatest ${JSON.stringify(stored)}`);
+    }
   }
-  // Also when the value is not a boolean.
-  const m = machine({ versions: { '/usr/local/bin/pi': () => ({ status: 0, stdout: `${MIN_PI_VERSION}\n` }) } });
-  const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.updateLatest': 'yes' }) };
-  assert.equal(setup({ env, home, ...m.options, find: () => '/usr/local/bin/pi' }), 0);
-  assert.equal(m.updates.length, 0);
+  // Corrupt settings fall back to empty settings instead of throwing.
+  for (const [name, , { find, settings, ...machineOptions }] of scenarios) {
+    if (settings) continue;
+    assert.deepEqual(outcome(machineOptions, find, '{not json'), outcome(machineOptions, find, undefined), `${name}: corrupt JSON`);
+  }
 });
 
 test('an automatically discovered npm copy below the minimum is upgraded in place', () => {
@@ -226,7 +232,9 @@ test('an automatically discovered npm copy below the minimum is upgraded in plac
   assert.equal(m.said.at(-1), `已升级到兼容版本 Pi 1.5.0：${own}`);
 });
 
-test('an explicit npm path below the series is protected, with guidance that does not mention a removed setting', () => {
+const forbiddenGuidance = ['跟随最新版', '留为 pi 让插件自动安装'];
+
+test('an explicit npm path below the series is protected, and the guidance says to clear pi.commandPath', () => {
   const old = machine({
     versions: { [own]: () => ({ status: 0, stdout: '1.0.9\n' }) },
     realpath: path => path === own ? npmActual : path,
@@ -236,9 +244,10 @@ test('an explicit npm path below the series is protected, with guidance that doe
   assert.equal(old.updates.length, 0);
   assert.equal(old.said.length, 1);
   const line = old.said[0];
-  assert.ok(line.startsWith(`! Pi 1.0.9（${own}）低于最低版本 ${MIN_PI_VERSION}`));
-  assert.match(line, new RegExp(`原来的安装工具把它升到 ${PI_SERIES} 或更新.*pi\\.commandPath.*受支持的 Pi.*npm、Homebrew、Bun 或 pnpm.*留为 pi 让插件自动安装`));
-  assert.ok(!line.includes('跟随最新版'));
+  assert.ok(line.startsWith(`! Pi 1.0.9（${own}）不满足最低版本 ${MIN_PI_VERSION}（需要该版本或更新的稳定版）`));
+  assert.match(line, new RegExp(`你在 pi\\.commandPath 里指定的，插件不会改动它.*升到 ${PI_SERIES} 或更新.*清空 pi\\.commandPath`));
+  assert.ok(!line.includes('低于最低版本'));
+  for (const text of forbiddenGuidance) assert.ok(!line.includes(text), text);
 });
 
 test('a recognized npm global install below the series is upgraded in its own prefix to the series', () => {
@@ -305,11 +314,38 @@ test('custom installers are taken over but never overwritten or falsely reported
     assert.equal(external.updates.length, 0);
   }
 
-  const old = machine({ versions: { '/custom/pi': () => ({ status: 0, stdout: '1.0.9\n' }) } });
-  assert.equal(setup({ env: {}, home, ...old.options, find: () => '/custom/pi' }), 1);
-  assert.equal(old.updates.length, 0);
-  assert.match(old.said[0], new RegExp(`^! Pi 1\\.0\\.9（/custom/pi）低于最低版本 ${MIN_PI_VERSION.replaceAll('.', '\\.')}.*升到 ${PI_SERIES} 或更新`));
-  assert.ok(!old.said[0].includes('跟随最新版'));
+  // Automatically discovered, below the series and not upgradable: the source is the problem.
+  for (const reported of ['1.0.9', `${MIN_PI_VERSION}-beta.1`]) {
+    const old = machine({ versions: { '/custom/pi': () => ({ status: 0, stdout: `${reported}\n` }) } });
+    assert.equal(setup({ env: {}, home, ...old.options, find: () => '/custom/pi' }), 1);
+    assert.equal(old.updates.length, 0);
+    assert.equal(old.said.length, 1);
+    const line = old.said[0];
+    assert.ok(line.startsWith(`! Pi ${reported}（/custom/pi）不满足最低版本 ${MIN_PI_VERSION}（需要该版本或更新的稳定版）`), line);
+    assert.match(line, new RegExp(`来源无法自动升级.*升到 ${PI_SERIES} 或更新.*改用 npm、Homebrew、Bun 或 pnpm 安装`));
+    assert.ok(!line.includes('低于最低版本'));
+    assert.ok(!line.includes('清空 pi.commandPath'));
+    for (const text of forbiddenGuidance) assert.ok(!line.includes(text), text);
+  }
+});
+
+test('a Pi that cannot run is reported by the outer branches, without touching it', () => {
+  const unrunnable = { '/custom/pi': () => ({ status: 1 }) };
+  const explicit = machine({ versions: unrunnable });
+  const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.commandPath': '/custom/pi' }) };
+  assert.equal(setup({ env, home, ...explicit.options, find: () => '/custom/pi' }), 1);
+  assert.equal(explicit.updates.length, 0);
+  assert.deepEqual(explicit.said, ['! 设置里的 Pi 路径无法运行：/custom/pi。请改正 pi.commandPath，或改回 pi 使用自动发现/插件安装。']);
+
+  const discovered = machine({ versions: unrunnable });
+  assert.equal(setup({ env: {}, home, ...discovered.options, find: () => '/custom/pi' }), 1);
+  assert.equal(discovered.updates.length, 0);
+  assert.deepEqual(discovered.said, ['! 找到的 Pi /custom/pi 无法运行。请修复或删除它，或在 pi.commandPath 中指定另一个 Pi。']);
+
+  // An upgradable discovered install that cannot run is reinstalled instead.
+  const npmOwned = machine({ versions: { [own]: () => ({ status: 1 }) }, realpath: path => path === own ? npmActual : path });
+  setup({ env: {}, home, ...npmOwned.options, find: () => own });
+  assert.equal(npmOwned.updates.length, 1);
 });
 
 test('a custom executable at the managed path is treated as external', () => {
@@ -412,7 +448,7 @@ test('an explicit 0.3 path below the series is left alone and fails with guidanc
   };
   assert.equal(setup({ env, home: legacy.root, ...legacy.m.options, find: legacy.find }), 1);
   assert.equal(legacy.m.updates.length, 0);
-  assert.match(legacy.m.said.at(-1), new RegExp(`^! Pi 1\\.0\\.9（${legacy.command}）低于最低版本 ${MIN_PI_VERSION.replaceAll('.', '\\.')}`));
+  assert.match(legacy.m.said.at(-1), new RegExp(`^! Pi 1\\.0\\.9（${legacy.command}）不满足最低版本 ${MIN_PI_VERSION.replaceAll('.', '\\.')}.*清空 pi\\.commandPath`));
 });
 
 test('a failed update of a too-old 0.3 copy fails setup', async t => {

@@ -87,14 +87,8 @@ export function setup({
   };
 
   const install = () => {
-    if (explicitlyConfigured && !version) {
-      fail(`设置里的 Pi 路径无法运行：${configured}。请改正 pi.commandPath，或改回 pi 使用自动发现/插件安装。`);
-      return 1;
-    }
-    if (!installable) {
-      fail(`Pi ${version ?? '版本未知'}（${launch}）来自无法自动升级的安装方式。请用原来的安装工具升级，或在 pi.commandPath 中改为 npm、Homebrew、Bun 或 pnpm 安装的 Pi。`);
-      return 1;
-    }
+    // Only reached for a missing Pi or an automatically discovered, upgradable one: an explicit
+    // pi.commandPath is never a missing Pi (findPi returns it as given), and `none` is upgradable.
     const target = updateTarget(owner, { env, home });
     // Only npm can pin a series; the other tools install what they offer.
     const pinned = owner.kind === 'none' || owner.kind === 'managed' || owner.kind === 'npm';
@@ -134,7 +128,10 @@ export function setup({
 
   if (!supportedVersion(version)) {
     if (installable && !explicitlyConfigured) return install();
-    fail(`Pi ${version}（${launch}）低于最低版本 ${MIN_PI_VERSION}，插件不会改动它。请用原来的安装工具把它升到 ${PI_SERIES} 或更新，或在 pi.commandPath 里改为受支持的 Pi（npm、Homebrew、Bun 或 pnpm 安装的，或留为 pi 让插件自动安装）。`);
+    const below = `Pi ${version}（${launch}）不满足最低版本 ${MIN_PI_VERSION}（需要该版本或更新的稳定版）`;
+    fail(explicitlyConfigured
+      ? `${below}。这个 Pi 是你在 pi.commandPath 里指定的，插件不会改动它：请用原来的安装工具把它升到 ${PI_SERIES} 或更新，或清空 pi.commandPath（留为 pi）；清空后若它是 npm、Homebrew、Bun 或 pnpm 安装的，插件会原地升级它。`
+      : `${below}，且它的来源无法自动升级。请用原来的工具把它升到 ${PI_SERIES} 或更新，或改用 npm、Homebrew、Bun 或 pnpm 安装。`);
     return 1;
   }
 
