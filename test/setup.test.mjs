@@ -26,7 +26,7 @@ const npmActual = join(home, '.local/lib/node_modules/@earendil-works/pi-coding-
 
 function machine({
   versions = {},
-  updateResult = { version: '1.4.0', path: own, installed: true },
+  updateResult = { version: '1.5.0', path: own, installed: true },
   realpath = path => path,
 } = {}) {
   const ran = [];
@@ -118,17 +118,17 @@ test('a pi file on PATH that cannot execute is skipped', async t => {
   const broken = join(brokenDir, 'pi');
   const working = join(workingDir, 'pi');
   await writeFile(broken, '#!/bin/sh\n');
-  await writeFile(working, '#!/bin/sh\necho 1.4.0\n');
+  await writeFile(working, '#!/bin/sh\necho 1.5.0\n');
   await chmod(working, 0o755);
   assert.equal(findPi({}, { env: { PATH: `${brokenDir}:${workingDir}` }, home: dir }), working);
 });
 
 test('an existing supported Pi is taken over without invoking npm', () => {
-  const m = machine({ versions: { '/usr/local/bin/pi': () => ({ status: 0, stdout: 'pi 1.4.0\n' }) } });
+  const m = machine({ versions: { '/usr/local/bin/pi': () => ({ status: 0, stdout: 'pi 1.5.0\n' }) } });
   assert.equal(setup({ env: {}, home, ...m.options, find: () => '/usr/local/bin/pi' }), 0);
   assert.deepEqual(m.ran, [['/usr/local/bin/pi', '--version']]);
   assert.equal(m.updates.length, 0);
-  assert.deepEqual(m.said, ['已有 Pi 1.4.0 可用：/usr/local/bin/pi']);
+  assert.deepEqual(m.said, ['已有 Pi 1.5.0 可用：/usr/local/bin/pi']);
 });
 
 test('setup cleans a stale committed backup even when follow-latest is off', async t => {
@@ -148,7 +148,7 @@ test('setup cleans a stale committed backup even when follow-latest is off', asy
   }));
   await writeFile(join(lock, 'owner-999999999-0f0f'), '');
   const m = machine({
-    versions: { [runtimeCommand]: () => ({ status: 0, stdout: '1.4.0\n' }) },
+    versions: { [runtimeCommand]: () => ({ status: 0, stdout: '1.5.0\n' }) },
     realpath: path => path === runtimeCommand ? runtimeActual : path,
   });
 
@@ -160,7 +160,7 @@ test('setup cleans a stale committed backup even when follow-latest is off', asy
   }), 0);
   await assert.rejects(stat(backup), error => error.code === 'ENOENT');
   await assert.rejects(stat(lock), error => error.code === 'ENOENT');
-  assert.deepEqual(m.said, [`已有 Pi 1.4.0 可用：${runtimeCommand}`]);
+  assert.deepEqual(m.said, [`已有 Pi 1.5.0 可用：${runtimeCommand}`]);
 });
 
 test('a missing Pi installs the verified series into ~/.local/bin', () => {
@@ -169,7 +169,7 @@ test('a missing Pi installs the verified series into ~/.local/bin', () => {
   assert.equal(m.updates.length, 1);
   assert.equal(m.updates[0].series, PI_SERIES);
   assert.equal(m.said[0], `安装 Pi ${PI_SERIES}.x 到 ${own}`);
-  assert.equal(m.said.at(-1), `已安装 Pi 1.4.0：${own}`);
+  assert.equal(m.said.at(-1), `已安装 Pi ${VERIFIED_PI_VERSION}：${own}`);
 });
 
 test('a missing Pi installs npm latest when follow-latest is on', () => {
@@ -188,7 +188,7 @@ test('an automatically discovered npm copy below the minimum is upgraded in plac
   assert.equal(setup({ env: {}, home, ...m.options, find: () => own }), 0);
   assert.equal(m.updates.length, 1);
   assert.equal(m.updates[0].series, PI_SERIES);
-  assert.equal(m.said.at(-1), `已升级到兼容版本 Pi 1.4.0：${own}`);
+  assert.equal(m.said.at(-1), `已升级到兼容版本 Pi 1.5.0：${own}`);
 });
 
 test('an explicit npm path is protected unless latest policy is enabled', () => {
@@ -211,7 +211,7 @@ test('an explicit npm path is protected unless latest policy is enabled', () => 
   assert.equal(setup({ env: latestEnv, home, ...latest.options, find: () => own }), 0);
   assert.equal(latest.updates.length, 1);
   assert.equal(latest.updates[0].series, null);
-  assert.equal(latest.said.at(-1), `已更新到 Pi 1.4.0：${own}`);
+  assert.equal(latest.said.at(-1), `已更新到 Pi 1.5.0：${own}`);
 
   const tooOld = machine({
     versions: { [own]: () => ({ status: 0, stdout: '1.0.9\n' }) },
@@ -219,40 +219,40 @@ test('an explicit npm path is protected unless latest policy is enabled', () => 
   });
   assert.equal(setup({ env: latestEnv, home, ...tooOld.options, find: () => own }), 0);
   assert.equal(tooOld.updates.length, 1);
-  assert.equal(tooOld.said.at(-1), `已更新到 Pi 1.4.0：${own}`);
+  assert.equal(tooOld.said.at(-1), `已更新到 Pi 1.5.0：${own}`);
 });
 
 test('follow-latest updates a recognized npm global install in its own prefix', () => {
   const external = '/opt/homebrew/bin/pi';
   const m = machine({
     versions: { [external]: () => ({ status: 0, stdout: '1.2.0\n' }) },
-    updateResult: { version: '1.4.0', path: external },
+    updateResult: { version: '1.5.0', path: external },
     realpath: () => '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
   });
   const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.updateLatest': true }) };
   assert.equal(setup({ env, home, ...m.options, find: () => external }), 0);
   assert.equal(m.updates.length, 1);
-  assert.equal(m.said.at(-1), `已更新到 Pi 1.4.0：${external}`);
+  assert.equal(m.said.at(-1), `已更新到 Pi 1.5.0：${external}`);
 });
 
 test('follow-latest reports an already-current npm Pi without pretending to reinstall it', () => {
   const external = '/opt/homebrew/bin/pi';
   const m = machine({
-    versions: { [external]: () => ({ status: 0, stdout: '1.4.0\n' }) },
-    updateResult: { version: '1.4.0', path: external, installed: false, changed: false },
+    versions: { [external]: () => ({ status: 0, stdout: '1.5.0\n' }) },
+    updateResult: { version: '1.5.0', path: external, installed: false, changed: false },
     realpath: () => '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
   });
   const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.updateLatest': true }) };
   assert.equal(setup({ env, home, ...m.options, find: () => external }), 0);
   assert.equal(m.updates.length, 1);
-  assert.equal(m.said.at(-1), `Pi 1.4.0 已是最新版本：${external}`);
+  assert.equal(m.said.at(-1), `Pi 1.5.0 已是最新版本：${external}`);
 });
 
 test('follow-latest updates a Homebrew formula through brew and reports where it went', () => {
   const external = '/opt/homebrew/bin/pi';
   const m = machine({
     versions: { [external]: () => ({ status: 0, stdout: '1.2.0\n' }) },
-    updateResult: { version: '1.4.0', path: external },
+    updateResult: { version: '1.5.0', path: external },
     realpath: path => path === external ? '/opt/homebrew/Cellar/pi-coding-agent/1.2.0/bin/pi' : path,
   });
   const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.updateLatest': true }) };
@@ -260,7 +260,7 @@ test('follow-latest updates a Homebrew formula through brew and reports where it
   assert.equal(m.updates.length, 1);
   assert.deepEqual(m.said, [
     '更新 Pi latest 到 Homebrew（brew upgrade pi-coding-agent）',
-    `已更新到 Pi 1.4.0：${external}`,
+    `已更新到 Pi 1.5.0：${external}`,
   ]);
 });
 
@@ -275,7 +275,7 @@ test('pnpm 11 and environment-configured Bun and pnpm homes are searched', () =>
 });
 
 test('custom installers are taken over but never overwritten or falsely reported as updatable', () => {
-  const current = machine({ versions: { '/custom/pi': () => ({ status: 0, stdout: '1.4.0\n' }) } });
+  const current = machine({ versions: { '/custom/pi': () => ({ status: 0, stdout: '1.5.0\n' }) } });
   assert.equal(setup({ env: {}, home, ...current.options, find: () => '/custom/pi' }), 0);
   assert.equal(current.updates.length, 0);
 
@@ -285,7 +285,7 @@ test('custom installers are taken over but never overwritten or falsely reported
     assert.equal(external.updates.length, 0);
   }
 
-  const latest = machine({ versions: { '/custom/pi': () => ({ status: 0, stdout: '1.4.0\n' }) } });
+  const latest = machine({ versions: { '/custom/pi': () => ({ status: 0, stdout: '1.5.0\n' }) } });
   const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.updateLatest': true }) };
   assert.equal(setup({ env, home, ...latest.options, find: () => '/custom/pi' }), 0);
   assert.equal(latest.updates.length, 0);
@@ -308,20 +308,20 @@ test('installer failures become the final setup line', () => {
 test('an update failure preserves an existing supported Pi', () => {
   const external = '/opt/homebrew/bin/pi';
   const m = machine({
-    versions: { [external]: () => ({ status: 0, stdout: '1.4.0\n' }) },
+    versions: { [external]: () => ({ status: 0, stdout: '1.5.0\n' }) },
     updateResult: new Error('npm registry unavailable'),
     realpath: () => '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
   });
   const env = { CODA_PLUGIN_SETTINGS: JSON.stringify({ 'pi.updateLatest': true }) };
   assert.equal(setup({ env, home, ...m.options, find: () => external }), 0);
   assert.equal(m.updates.length, 1);
-  assert.match(m.said.at(-1), /继续使用已有的 Pi 1\.4\.0.*npm registry unavailable/);
+  assert.match(m.said.at(-1), /继续使用已有的 Pi 1\.5\.0.*npm registry unavailable/);
 });
 
 test('a failed rollback fails setup even though the Pi seen before the update was supported', () => {
   const external = '/opt/homebrew/bin/pi';
   const m = machine({
-    versions: { [external]: () => ({ status: 0, stdout: '1.4.0\n' }) },
+    versions: { [external]: () => ({ status: 0, stdout: '1.5.0\n' }) },
     updateResult: new RollbackError('安装完成，但 /opt/homebrew/bin/pi 无法运行；恢复原 Pi 安装失败：EIO'),
     realpath: () => '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
   });
@@ -334,7 +334,7 @@ test('an update failure keeps the existing Pi only if it still runs afterwards',
   const external = '/opt/homebrew/bin/pi';
   let probes = 0;
   const m = machine({
-    versions: { [external]: () => (++probes === 1 ? { status: 0, stdout: '1.4.0\n' } : { status: 1 }) },
+    versions: { [external]: () => (++probes === 1 ? { status: 0, stdout: '1.5.0\n' } : { status: 1 }) },
     updateResult: new Error('npm registry unavailable'),
     realpath: () => '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',
   });
@@ -365,7 +365,7 @@ async function legacyInstall(t, version) {
   });
   const m = machine({
     versions: { [command]: () => ({ status: 0, stdout: `${version}\n` }) },
-    updateResult: { version: '1.4.0', path: command },
+    updateResult: { version: '1.5.0', path: command },
     realpath: realpathSync,
   });
   return { root, prefix, env, command, find, m };
@@ -384,14 +384,14 @@ test('a too-old 0.3 plugin copy is updated in its own prefix and verified where 
   assert.equal(setup({ env: legacy.env, home: legacy.root, ...legacy.m.options, find: legacy.find }), 0);
   assert.equal(legacy.m.updates.length, 1);
   assert.equal(legacy.m.said[0], `更新 Pi ${PI_SERIES}.x 到 ${legacy.prefix}`);
-  assert.equal(legacy.m.said.at(-1), `已升级到兼容版本 Pi 1.4.0：${legacy.command}`);
+  assert.equal(legacy.m.said.at(-1), `已升级到兼容版本 Pi 1.5.0：${legacy.command}`);
 });
 
 test('an explicit 0.3 path is not reported ready when the update went elsewhere', async t => {
   const legacy = await legacyInstall(t, '1.0.9');
   const m = machine({
     versions: { [legacy.command]: () => ({ status: 0, stdout: '1.0.9\n' }) },
-    updateResult: { version: '1.4.0', path: own },
+    updateResult: { version: '1.5.0', path: own },
     realpath: realpathSync,
   });
   const env = {
@@ -400,7 +400,7 @@ test('an explicit 0.3 path is not reported ready when the update went elsewhere'
   };
   assert.equal(setup({ env, home: legacy.root, ...m.options, find: legacy.find }), 1);
   assert.equal(m.said[0], `更新 Pi latest 到 ${legacy.prefix}`);
-  assert.match(m.said.at(-1), new RegExp(`^! 装好了 Pi 1\\.4\\.0.*会启动的 ${legacy.command} 是 1\\.0\\.9`));
+  assert.match(m.said.at(-1), new RegExp(`^! 装好了 Pi 1\\.5\\.0.*会启动的 ${legacy.command} 是 1\\.0\\.9`));
 });
 
 test('a failed update of a too-old 0.3 copy fails setup', async t => {
@@ -473,7 +473,7 @@ test('manifest and minimum-version metadata agree with the managed local runtime
   const root = join(import.meta.dirname, '..');
   const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
   const lock = JSON.parse(await readFile(join(root, 'package-lock.json'), 'utf8'));
-  assert.equal(manifest.version, '0.5.1');
+  assert.equal(manifest.version.split('.').slice(0, 2).join('.'), PI_SERIES);
   assert.match(manifest.devDependencies[PACKAGE], new RegExp(`^${PI_SERIES.replace('.', '\\.')}\\.\\d+$`));
   assert.equal(manifest.dependencies[PACKAGE], undefined);
   assert.equal(manifest.devDependencies[PACKAGE], VERIFIED_PI_VERSION);

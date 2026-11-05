@@ -106,3 +106,26 @@ test("getBase64DecodedSize 50 MiB limit cases", () => {
   assert.equal(getBase64DecodedSize(exact50MiB) <= 50 * 1024 * 1024, true);
   assert.equal(getBase64DecodedSize(over50MiB) > 50 * 1024 * 1024, true);
 });
+
+test("Z.ai usage-limit code 1308 is quota exhaustion, while short-lived 429 throttling stays a plain error", () => {
+  const quota = { kind: "quota_exhausted" };
+  const cases = [
+    // The localized body has none of the English quota wording; only the code identifies it.
+    { input: '429 {"error":{"code":"1308","message":"已达到 5 小时的使用上限。您的限额将在 2026-11-05 21:00:00 重置"}}', expected: quota },
+    { input: '429 {"error":{"code":"1308","message":"Usage limit reached for 5 hour. Your limit will reset at 2026-11-05 21:00:00"}}', expected: quota },
+    { input: '429 {"error":{"code":1308,"message":"x"}}', expected: quota },
+    { input: '429 {\\"error\\":{\\"code\\":\\"1308\\"}}', expected: quota },
+    { input: 'Error: 429 {"error": {"code" : "1308"}}', expected: quota },
+    // Z.ai's concurrency/rate codes and other 429s are still not retried and not reported as quota.
+    { input: '429 {"error":{"code":"1302","message":"您的账户已达到速率限制，请您控制请求频率"}}', expected: null },
+    { input: '429 {"error":{"code":"1305","message":"该模型当前访问量过大"}}', expected: null },
+    { input: '429 {"error":{"code":"13080","message":"x"}}', expected: null },
+    { input: '429 {"error":{"code":"21308","message":"x"}}', expected: null },
+    { input: "request id 1308 failed with 429 Too Many Requests", expected: null },
+    { input: "429 rate limit exceeded, retry in 2s", expected: null },
+    { input: "429 Too Many Requests", expected: null },
+  ];
+  for (const { input, expected } of cases) {
+    assert.deepEqual(classifyPiFailure(input), expected, `Failed on input: ${input}`);
+  }
+});

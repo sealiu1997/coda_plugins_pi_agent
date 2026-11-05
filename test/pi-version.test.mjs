@@ -196,3 +196,10 @@ test('Pi versions are classified against a series as unsupported, verified or un
   assert.equal(unverifiedNotice(`${major}.${minor - 1}.0`), null);
   assert.match(unverifiedNotice(`${major}.${minor + 1}.0`), new RegExp(`^Pi ${major}\\.${minor + 1}\\.0 高于本插件验证过的 ${major}\\.${minor} 系列，仍可使用但尚未验证；建议在插件页更新 Pi 插件。$`));
 });
+
+test('the fallback series, the verified Pi version and the plugin manifest all name the same series', async () => {
+  const { FALLBACK_PI_SERIES, PI_SERIES, VERIFIED_PI_VERSION } = await import('../agent/pi-command.mjs');
+  const seriesOf = version => version.split('.').slice(0, 2).join('.');
+  assert.equal(seriesOf(VERIFIED_PI_VERSION), PI_SERIES);
+  assert.equal(FALLBACK_PI_SERIES, PI_SERIES);
+});

@@ -21,6 +21,9 @@ const QUOTA_PATTERN = new RegExp([
   "billing_hard_limit_reached",
   "usage limit (?:reached|exceeded)",
   "reached your .{0,40}usage limit",
+  // Zhipu/Z.ai code 1308 (the plan's usage cap, sent as HTTP 429 with a localized message): Pi stopped
+  // retrying it as a transient 429 in 1.5. Matches the code in the JSON body, plain or escaped.
+  String.raw`\bcode["\\]*\s*[:=]\s*["\\]*1308(?![0-9])`,
 ].join("|"), "i");
 
 const RETRYABLE_SERVICE_PATTERNS = [

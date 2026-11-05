@@ -393,3 +393,42 @@ test('malformed JSON and null RPC output reject while still reaping the child', 
     assert.deepEqual(child.signals,['SIGTERM']);
   }
 });
+
+test('pi-schema Schema<T> declarations resolve like TypeBox ones, so ProviderConfig costs are proven numbers', t => {
+  const dir = fixture(t);
+  write(dir, 'dist/core/extensions/types.d.ts', `
+export interface ExtensionAPI {registerProvider(name: string, config: ProviderConfig): void;}
+export interface ProviderConfig {
+  name?: string; baseUrl?: string; apiKey?: string; api?: string;
+  models?: ProviderChatModelConfig[];
+}
+export interface ProviderChatModelConfig {
+  id: string; name: string; reasoning: boolean; input: ("text" | "image")[];
+  cost: AnyModel["cost"]; contextWindow: number; maxTokens: number;
+}
+type AnyModel = CostedModel<Api>;
+`);
+  write(dir, 'dist/modes/rpc/rpc-types.d.ts', `${types}
+export interface CostedModel<A> { cost: ModelCost; }
+export type ModelCost = Static<typeof ModelCostSchema>;
+export declare const ModelCostSchema: import("@earendil-works/pi-schema").Schema<{
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    tiers?: { input: number; inputTokensAbove: number; }[] | undefined;
+}>;
+type Api = string;
+`);
+  const c = {...inspectPackage(dir, help), version: '1.0.0'};
+  const contract = surface.contracts.find(x => x.symbol === 'ProviderConfig');
+  const costs = Object.fromEntries(Object.entries(contract.fields).filter(([path]) => path.includes('.cost.')));
+  const only = {...minimal, contracts: [{...contract, fields: costs}]};
+  const report = compare(only, c, baseline(c));
+  assert.deepEqual(report.review.filter(r => r.message.includes('ProviderConfig')), []);
+  assert.deepEqual(report.incompatible, []);
+  assert.equal(report.passed.filter(r => r.message.includes('ProviderConfig.models.[].cost.')).length, 4);
+  // A cost field that is not a number is still caught through the wrapper.
+  c.db.get('ModelCostSchema').body = 'import("@earendil-works/pi-schema").Schema<{ input: string; output: number; cacheRead: number; cacheWrite: number; }>';
+  assert.ok(compare(only, c, baseline(c)).incompatible.some(r => r.message.includes('cost.input')));
+});

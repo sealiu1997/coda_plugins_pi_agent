@@ -12,7 +12,7 @@ export const PACKAGE = '@earendil-works/pi-coding-agent';
 // X.Y.*), Z is the plugin's patch number. package.json is the single source of truth. A plugin
 // version that is not a usable Pi series (0.x, unreadable or malformed manifest) falls back to the
 // last series verified before this scheme, so the floor can never drop below the one that shipped.
-export const FALLBACK_PI_SERIES = '1.4';
+export const FALLBACK_PI_SERIES = '1.5';
 const SERIES_FLOOR = [1, 1];
 
 export function readPiSeries({
@@ -35,7 +35,7 @@ export function readPiSeries({
 
 export const PI_SERIES = readPiSeries();
 export const MIN_PI_VERSION = `${PI_SERIES}.0`;
-export const VERIFIED_PI_VERSION = '1.4.0';
+export const VERIFIED_PI_VERSION = '1.5.0';
 
 export const parsePiVersion = output => {
   const match = String(output ?? '').match(/\bv?(\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?)\b/);
