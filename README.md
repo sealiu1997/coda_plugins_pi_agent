@@ -10,8 +10,9 @@
   - 低于 `X.Y.0`：不支持，按下面的流程升级或报错。
   - `X.Y.*`：已验证。
   - 更高的次版本或主版本：照常使用，但 setup 输出一行「尚未验证」提示，建议更新插件；绝不因为你自己升级了 Pi 就起不来。
+  - 想用新于验证系列的 Pi，等插件跟进新系列；你自己升级 Pi 时插件只提示「尚未验证」，不阻止。
   - 为什么不是「版本号严格等于 Pi 版本」：插件自己的修复没有版本号可用——Coda 比较版本时忽略 `+build`，npm 也会规整掉它，`-pre` 又排在正式版之前，所以第三段留给插件自己的补丁号。
-- 设置里的「Pi 跟随最新版」打开并保存后，会通过准备运行环境把可识别的 npm、Homebrew、Bun、pnpm 或插件管理的安装更新到最新版；默认（关闭）则只在缺失或低于验证系列时处理：缺失或插件管理的安装装验证系列的最新补丁，npm 安装在原 prefix 原地升级，Homebrew、Bun、pnpm 按各自工具给出的版本，无法识别来源的自定义安装升不了，会报错并提示用原来的安装工具升级。
+- 插件只在缺失或低于验证系列时处理 Pi：缺失或插件管理的安装装验证系列的最新补丁，npm 安装在原 prefix 原地升级，Homebrew、Bun、pnpm 按各自工具给出的版本，无法识别来源的自定义安装升不了，会报错并提示用原来的安装工具升级。没有「跟随最新版」开关（1.5.0 曾有，1.5.1 起移除）：想用新于验证系列的 Pi，等插件跟进新系列；你自己升级 Pi 时插件只提示「尚未验证」，不阻止。
 - 自定义脚本、独立下载等无法识别来源的安装会被接管和验证，但不会被静默覆盖。需要由插件自动更新时，应使用 npm、Homebrew、Bun 或 pnpm 安装，或用 `pi.commandPath` 明确指向这样一个安装。
 - 还要在 Coda 里添加 provider（见下），或在 pi 里完成登录。
 - Node 由 Coda 提供（`$CODA_NODE`）。Pi 是独立的本机安装；Pi 1.5.0 和 Coda 官方检查器只作为开发、CI 与兼容扫描的 devDependency。
@@ -30,7 +31,6 @@
 | 设置 | 默认值 | 说明 |
 | --- | --- | --- |
 | `pi.commandPath` | `pi` | 留为 `pi` 时自动接管本机已有 Pi；未安装时使用插件安装到 `~/.local/bin` 的 Pi。填其他命令或绝对路径时强制指定，显式路径不会被静默替换。 |
-| `pi.updateLatest` | 关 | 默认跟随插件验证过的系列；打开并保存后，准备运行环境会把可识别的 npm 或插件管理的 Pi 更新到 npm latest。关闭时只接管并验证已有安装，缺失或低于验证系列时才处理（缺失或插件管理的装验证系列的最新补丁，npm 原地升级，其余按各自工具，无法识别来源的会报错）。 |
 | `pi.extraArgs` | 空 | 追加到 `pi --mode rpc` 的额外 CLI 参数。 |
 | `pi.providers` | 无 | 一行一个 provider：地址、Key（密文）、协议、推理、上下文长度、最大输出。行名就是 Pi 里的 provider 名（不能带 `/`）。 |
 
@@ -112,16 +112,16 @@ node scripts/check-pi-compat.mjs --accept
 - 没有 Pi：安装插件验证过的系列（`@X.Y`，该系列最新补丁）到 `~/.local`。
 - 已有 Pi 新于验证过的系列：照常使用，输出「尚未验证」提示，不降级。
 - 自动发现的 npm 全局 Pi 低于最低版本：在它原来的 npm prefix 中升级到验证过的系列。Homebrew、Bun、pnpm 无法钉系列，沿用它们各自的做法，装完核对版本在不在 `X.Y.*`，不在就按「尚未验证」提示，不回滚、不报错。
-- 「Pi 跟随最新版」打开：保存设置后按安装来源更新到最新版（不再限于验证过的系列），关闭后停止跟随：
-  - npm 全局安装（含 Homebrew 的 Node、nvm、fnm、asdf 下的）与插件安装到 `~/.local` 的：在原 npm prefix 中升级到 npm latest（见下面的 stage 与事务）。
-  - Homebrew 软件包 `pi-coding-agent`：运行 `brew upgrade pi-coding-agent`，升级到 Homebrew 提供的版本（可能晚于 npm latest；按 Homebrew 的规则，过旧的依赖如 `node` 会一起升级）。
-  - Bun 全局安装：在它的 `BUN_INSTALL` 中运行 `bun add --global @earendil-works/pi-coding-agent@<latest>`。
-  - pnpm 全局安装：在它的 `PNPM_HOME` 中运行 `pnpm add --global @earendil-works/pi-coding-agent@<latest>`。pnpm 11 添加一个包会替换包含它的整个安装组，所以 Pi 与其他工具同组（`pnpm add -g a,b`）时，其他成员按已安装的版本（`file:`、git 等按原写法）一起重装，不会被删掉。构建脚本按用户自己的 pnpm 策略处理：用户批准过的（`allowBuilds`）照常重建，其余仍按 pnpm 默认被拦下，插件不另加 `ignore-scripts`。
+- 低于最低版本、来源可识别且不是显式 `pi.commandPath` 指定的 Pi，按安装来源升级：
+  - npm 全局安装（含 Homebrew 的 Node、nvm、fnm、asdf 下的）与插件安装到 `~/.local` 的：在原 npm prefix 中升级到验证系列的最新补丁（见下面的 stage 与事务）。
+  - Homebrew 软件包 `pi-coding-agent`：运行 `brew upgrade pi-coding-agent`，升级到 Homebrew 提供的版本（可能不在验证系列内，那就只提示「尚未验证」；按 Homebrew 的规则，过旧的依赖如 `node` 会一起升级）。
+  - Bun 全局安装：在它的 `BUN_INSTALL` 中运行 `bun add --global @earendil-works/pi-coding-agent@<npm latest>`，装完核对版本，不在验证系列内就提示「尚未验证」、不回滚。
+  - pnpm 全局安装：在它的 `PNPM_HOME` 中运行 `pnpm add --global @earendil-works/pi-coding-agent@<npm latest>`，装完核对版本，不在验证系列内就提示「尚未验证」、不回滚。pnpm 11 添加一个包会替换包含它的整个安装组，所以 Pi 与其他工具同组（`pnpm add -g a,b`）时，其他成员按已安装的版本（`file:`、git 等按原写法）一起重装，不会被删掉。构建脚本按用户自己的 pnpm 策略处理：用户批准过的（`allowBuilds`）照常重建，其余仍按 pnpm 默认被拦下，插件不另加 `ignore-scripts`。
   - Homebrew、Bun、pnpm 的安装由它们自己替换，插件不搬动它们管理的文件，也就没有插件自己的回滚：目标版本不是插件支持的稳定版时不更新，更新后重新验证实际启动的 Pi。
-- registry 暂时不可达或更新失败时，已有且达到最低版本的 Pi 会继续可用；缺少可用 Pi 时准备环境才失败。
-- npm 只安装到同一 prefix 下的临时 stage，暂存的 Pi 能运行、不低于 npm latest、不是预发布版之后，才由准备环境进程把旧 package 与命令入口移到备份、换入新版本，并再次验证；失败时恢复旧安装。准备环境中途被终止时，仍在运行的 npm 只能写 stage，不会改动正式安装。
+- 更新失败时，若重新探测发现已有的 Pi 已达到最低版本，就继续使用它；否则准备环境失败。
+- npm 只安装到同一 prefix 下的临时 stage，暂存的 Pi 能运行、不低于目标系列的最新补丁、不是预发布版之后，才由准备环境进程把旧 package 与命令入口移到备份、换入新版本，并再次验证；失败时恢复旧安装。准备环境中途被终止时，仍在运行的 npm 只能写 stage，不会改动正式安装。
 - 更新锁是 prefix 下只含一个 `owner-<pid>-<token>` 条目的目录，接管陈旧锁时只重命名那个确切条目，并发回收不会夺走别人新取得的锁。事务清单与插件状态目录里的外部 prefix 记录让命令入口已移走后中断的更新也能在下次准备环境时恢复；恢复失败时准备环境报失败，不按更新前的版本当作仍可用。
-- 自定义脚本、独立下载或无法识别安装来源的 Pi：可以接管，但不会覆盖；要自动更新时请改用 npm、Homebrew、Bun 或 pnpm 安装并重新保存设置。
+- 自定义脚本、独立下载或无法识别安装来源的 Pi：可以接管，但不会覆盖；要让插件自动升级时请改用 npm、Homebrew、Bun 或 pnpm 安装，或把 `pi.commandPath` 留为 `pi`。
 
 Coda 官方 Claude SDK 和 Codex 插件把各自的 SDK/CLI 锁在插件依赖里，更新时在插件页检查和更新整个插件。Pi 插件按你的要求改成管理机器上的 Pi；Pi 插件本体的版本仍由 Coda 插件商店的「检查更新 / 更新」机制管理。更新 Pi 不会主动结束正在运行的会话，新启动的 Pi 进程使用更新后的版本。
 

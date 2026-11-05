@@ -139,7 +139,7 @@ test('runtime version floor rejects old, unknown and prerelease versions with up
   const below = `${major}.${minor - 1}.99`;
   for (const value of [null,'?',below,'1.0.99',`${MIN_PI_VERSION}-beta.1`,'garbage']) {
     assert.equal(supportedVersion(value),false);
-    assert.throws(()=>assertPiVersion(value,'/external/pi'),new RegExp(`最低版本 ${MIN_PI_VERSION.replaceAll('.', '\\.')}.*跟随最新版.*原来的安装工具升级`,'s'));
+    assert.throws(()=>assertPiVersion(value,'/external/pi'),new RegExp(`最低版本 ${MIN_PI_VERSION.replaceAll('.', '\\.')}.*原来的安装工具把它升到 ${MIN_PI_VERSION.split('.').slice(0, 2).join('\\.')} 或更新.*pi\\.commandPath`,'s'));
   }
   for (const value of [MIN_PI_VERSION,`${major}.${minor}.1`,`${major}.${minor + 6}.0`,`${major + 1}.0.0`,`${MIN_PI_VERSION}+build`]) assert.equal(supportedVersion(value),true);
 });

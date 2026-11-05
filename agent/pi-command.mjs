@@ -182,7 +182,7 @@ export function assertPiVersion(version, launch) {
   if (!supportedVersion(version)) {
     throw new Error(
       `Pi ${version ?? '版本未知'}（${launchLabel(launch)}）不满足最低版本 ${MIN_PI_VERSION}。`
-      + '请在插件设置中打开「Pi 跟随最新版」并保存，或使用原来的安装工具升级。',
+      + `请用原来的安装工具把它升到 ${PI_SERIES} 或更新，或在 pi.commandPath 里改为受支持的 Pi（npm、Homebrew、Bun 或 pnpm 安装的，或留为 pi 让插件自动安装）。`,
     );
   }
   return version;

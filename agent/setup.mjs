@@ -17,7 +17,7 @@ import {
   recoverIdleInstallation,
   recoverPendingInstallation,
   runtimeOwner,
-  updateLatest,
+  updatePi,
   updateTarget,
 } from './pi-runtime.mjs';
 
@@ -35,8 +35,8 @@ const parseSettings = value => {
 // this after install, update and plugin-settings changes. Existing Pi installations are taken
 // over first. A missing or too old Pi gets the newest patch of the series this plugin was
 // verified against (npm; Homebrew, Bun and pnpm cannot pin one and get what their tool offers).
-// Opt-in latest mode updates to npm latest instead. A Pi newer than the verified series is never
-// refused: it runs, with a note that it is unverified.
+// A Pi newer than the verified series is never refused: it runs, with a note that it is
+// unverified. Wanting a newer Pi than the series means waiting for the plugin to follow it.
 export function setup({
   env = process.env,
   home = homedir(),
@@ -44,7 +44,7 @@ export function setup({
   run = spawnSync,
   find = findPi,
   realpath = realpathSync,
-  update = updateLatest,
+  update = updatePi,
   say = line => process.stdout.write(`${line}\n`),
   fail = line => process.stderr.write(`${line}\n`),
 } = {}) {
@@ -53,7 +53,6 @@ export function setup({
     ? settings['pi.commandPath'].trim()
     : '';
   const explicitlyConfigured = configured && configured !== 'pi';
-  const followLatest = settings['pi.updateLatest'] === true;
   try {
     recoverPendingInstallation({ env });
   } catch (error) {
@@ -87,7 +86,7 @@ export function setup({
     return 0;
   };
 
-  const install = ({ updateRequested }) => {
+  const install = () => {
     if (explicitlyConfigured && !version) {
       fail(`设置里的 Pi 路径无法运行：${configured}。请改正 pi.commandPath，或改回 pi 使用自动发现/插件安装。`);
       return 1;
@@ -98,7 +97,7 @@ export function setup({
     }
     const target = updateTarget(owner, { env, home });
     // Only npm can pin a series; the other tools install what they offer.
-    const pinned = !followLatest && (owner.kind === 'none' || owner.kind === 'managed' || owner.kind === 'npm');
+    const pinned = owner.kind === 'none' || owner.kind === 'managed' || owner.kind === 'npm';
     say(`${owner.kind === 'none' ? '安装' : '更新'} Pi ${pinned ? `${PI_SERIES}.x` : 'latest'} 到 ${target}`);
     try {
       const installed = update({ env, home, node, run, find, realpath, series: pinned ? PI_SERIES : null });
@@ -109,9 +108,7 @@ export function setup({
         fail(`装好了 Pi ${installed.version ?? '版本未知'}（${installed.path ?? target}），但 Agent 会启动的 ${started} 是 ${startedVersion ?? '无法运行'}，最低需要 ${MIN_PI_VERSION}。请检查 pi.commandPath。`);
         return 1;
       }
-      return ready(installed.changed === false
-        ? `Pi ${startedVersion} 已是最新版本：${started}`
-        : `${owner.kind === 'none' ? '已安装' : updateRequested ? '已更新到' : '已升级到兼容版本'} Pi ${startedVersion}：${started}`, startedVersion);
+      return ready(`${owner.kind === 'none' ? '已安装' : '已升级到兼容版本'} Pi ${startedVersion}：${started}`, startedVersion);
     } catch (error) {
       // Probe again: the snapshot taken before the update says nothing about what is installed now.
       const current = !(error instanceof RollbackError) && version
@@ -125,10 +122,10 @@ export function setup({
     }
   };
 
-  if (launch === 'pi') return install({ updateRequested: false });
+  if (launch === 'pi') return install();
 
   if (!version) {
-    if (!explicitlyConfigured && installable) return install({ updateRequested: false });
+    if (!explicitlyConfigured && installable) return install();
     fail(explicitlyConfigured
       ? `设置里的 Pi 路径无法运行：${configured}。请改正 pi.commandPath，或改回 pi 使用自动发现/插件安装。`
       : `找到的 Pi ${launch} 无法运行。请修复或删除它，或在 pi.commandPath 中指定另一个 Pi。`);
@@ -136,18 +133,9 @@ export function setup({
   }
 
   if (!supportedVersion(version)) {
-    if (installable && (!explicitlyConfigured || followLatest)) {
-      return install({ updateRequested: followLatest });
-    }
-    fail(`Pi ${version}（${launch}）低于最低版本 ${MIN_PI_VERSION}。请用原来的安装工具升级，或在插件设置中打开「Pi 跟随最新版」并保存。`);
+    if (installable && !explicitlyConfigured) return install();
+    fail(`Pi ${version}（${launch}）低于最低版本 ${MIN_PI_VERSION}，插件不会改动它。请用原来的安装工具把它升到 ${PI_SERIES} 或更新，或在 pi.commandPath 里改为受支持的 Pi（npm、Homebrew、Bun 或 pnpm 安装的，或留为 pi 让插件自动安装）。`);
     return 1;
-  }
-
-  if (followLatest) {
-    if (!installable) {
-      return ready(`已有 Pi ${version} 可用：${launch}。它来自无法自动升级的安装方式；继续使用现有版本，请用原来的安装工具更新。`, version);
-    }
-    return install({ updateRequested: true });
   }
 
   return ready(`已有 Pi ${version} 可用：${launch}`, version);
