@@ -73,6 +73,9 @@ jobs:
       # npm publish already exited 0 here, so a slow registry must not turn a real release into a
       # failed run. `npm view` can keep answering 404 for minutes after a publish (cached packument),
       # so ask the registry for the exact version directly and only warn when it is still not readable.
+      # Every request is time-limited, or one stalled connection would hang the step until the job
+      # timeout. Worst case: 20 attempts x (15 s curl limit + 15 s pause) = 10 min, well inside the
+      # 20 min job timeout that also has to cover install, tests and checks.
       - if: steps.decide.outputs.publish == 'true'
         name: Confirm the release
         env:
@@ -83,8 +86,10 @@ jobs:
           url="https://registry.npmjs.org/${name//\//%2f}/$version"
           attempts="${CONFIRM_ATTEMPTS:-20}"
           interval="${CONFIRM_INTERVAL:-15}"
+          connect_timeout="${CONFIRM_CURL_CONNECT_TIMEOUT:-10}"
+          max_time="${CONFIRM_CURL_MAX_TIME:-15}"
           for attempt in $(seq 1 "$attempts"); do
-            if body=$(curl -fsS "$url" 2>/dev/null) \
+            if body=$(curl -fsS --connect-timeout "$connect_timeout" --max-time "$max_time" "$url" 2>/dev/null) \
               && [ "$(printf '%s' "$body" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")" = "$version" ]; then
               echo "已发布 $SPEC。" >> "$GITHUB_STEP_SUMMARY"
               exit 0

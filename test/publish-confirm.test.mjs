@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -85,4 +85,70 @@ test("confirm: a different version in the answer does not count as confirmed", a
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /::warning::/);
   assert.doesNotMatch(r.summary, /^已发布 @coda/);
+});
+
+// A curl that hangs like a stalled TLS handshake or response unless it is given `--max-time N`;
+// with it, it sleeps N seconds and exits 28 (curl's timeout code).
+const HANGING_CURL = (dir) => `#!/bin/sh
+echo "$@" >> "${dir}/curl.log"
+max=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--max-time" ]; then max="$2"; fi
+  shift
+done
+if [ -z "$max" ]; then exec sleep 300; fi
+sleep "$max"
+exit 28
+`;
+
+test("confirm: a curl that hangs is cut off by the per-request limit, then only warns and exits 0", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "publish-confirm-hang-"));
+  let child;
+  try {
+    const bin = join(dir, "bin");
+    await mkdir(bin);
+    await writeFile(join(bin, "curl"), HANGING_CURL(dir), { mode: 0o755 });
+    const summary = join(dir, "summary.md");
+    await writeFile(summary, "");
+    const started = Date.now();
+    const result = await new Promise((resolve) => {
+      // Own process group, so the hard timeout also reaps a curl that never returns.
+      child = spawn("bash", ["-e", "-c", confirmScript()], {
+        detached: true,
+        env: {
+          PATH: `${bin}:${process.env.PATH}`,
+          SPEC: "@coda-console/pi@1.5.0",
+          GITHUB_STEP_SUMMARY: summary,
+          CONFIRM_ATTEMPTS: "2",
+          CONFIRM_INTERVAL: "0",
+          CONFIRM_CURL_MAX_TIME: "1",
+          CONFIRM_CURL_CONNECT_TIMEOUT: "1",
+        },
+      });
+      let stdout = "";
+      child.stdout.on("data", (d) => (stdout += d));
+      const timer = setTimeout(() => {
+        try { process.kill(-child.pid, "SIGKILL"); } catch {}
+        resolve({ hung: true, stdout });
+      }, 10_000);
+      child.on("close", (status) => {
+        clearTimeout(timer);
+        resolve({ status, stdout });
+      });
+    });
+    assert.ok(!result.hung, "the step hung: curl has no per-request time limit");
+    assert.ok(Date.now() - started < 10_000);
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /^::warning::/);
+    assert.match(await readFile(summary, "utf8"), /已发布，但 registry 暂未读到/);
+    const calls = (await readFile(join(dir, "curl.log"), "utf8")).split("\n").filter(Boolean);
+    assert.equal(calls.length, 2);
+    for (const call of calls) {
+      assert.match(call, /--connect-timeout 1\b/);
+      assert.match(call, /--max-time 1\b/);
+    }
+  } finally {
+    try { process.kill(-child.pid, "SIGKILL"); } catch {}
+    await rm(dir, { recursive: true, force: true });
+  }
 });
