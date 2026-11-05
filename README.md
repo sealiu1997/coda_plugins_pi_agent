@@ -139,6 +139,8 @@ Coda 官方 Claude SDK 和 Codex 插件把各自的 SDK/CLI 锁在插件依赖�
 | Workflow filename | `publish.yml` |
 | Environment | 留空 |
 
+登记时在 “Allowed actions” 里**必须勾选 “Allow `npm publish`”**：npm 默认只允许 `npm stage publish`，而这个 workflow 直接执行 `npm publish`，不勾会被拒；`npm dist-tag` 用不到，不用勾。首次发布成功后，这条连接的状态会从 “Pending validation” 变为已验证（需在页面提示的期限内发布一次）。
+
 所以发新版就是在 PR 里把 `package.json` 与 `package-lock.json` 的版本加一，合并后由这个 workflow 发布。插件自己的修复只加补丁号（`1.5.0` → `1.5.1`）；验证了新的 Pi 系列（如 1.6）时，把 `X.Y` 对齐过去、补丁号归零（`1.6.0`），同时把 devDependency 的 Pi 钉到该系列并更新 `compat/pi-snapshot.json`。
 
 ## Pi 1.5 的适配结论
