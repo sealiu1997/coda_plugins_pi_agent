@@ -32,18 +32,25 @@ jobs:
           name=$(node -p "require('./package.json').name")
           version=$(node -p "require('./package.json').version")
           echo "spec=$name@$version" >> "$GITHUB_OUTPUT"
+          # stdout carries the answer, stderr the errors and npm's own warnings (setup-node's npmrc makes
+          # npm warn about always-auth); keep them apart so a warning can never pass for a version.
+          err_file=$(mktemp)
           set +e
-          out=$(npm view "$name@$version" version 2>&1)
+          out=$(npm view "$name@$version" version 2>"$err_file")
           status=$?
           set -e
+          err=$(cat "$err_file")
+          rm -f "$err_file"
           if [ "$status" -eq 0 ] && [ "$out" = "$version" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "$name@$version 已在 npm 上，跳过发布。" >> "$GITHUB_STEP_SUMMARY"
-          elif { [ "$status" -eq 0 ] && [ -z "$out" ]; } || printf '%s' "$out" | grep -q 'E404'; then
+          elif [ "$status" -eq 0 ] && [ -z "$out" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          elif [ "$status" -ne 0 ] && printf '%s' "$err" | grep -q 'E404'; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             # Only a definite "not found" counts as unpublished; any other registry answer stops here.
-            printf '%s\n' "$out"
+            printf '%s\n%s\n' "$err" "$out"
             exit 1
           fi
       - if: steps.decide.outputs.publish == 'true'
