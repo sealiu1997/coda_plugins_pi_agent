@@ -2,7 +2,7 @@
   "name": "@coda-console/pi",
   "id": "pi",
   "displayName": "Pi",
-  "description": "Pi Agent 插件：接管本机已有 Pi，缺失时自动安装插件验证过的系列（版本号前两段 X.Y 即 Pi 的 X.Y 系列），自动发现的 npm、Homebrew、Bun 或 pnpm 安装低于该系列时由插件升级（显式路径与自定义安装不会被改动），以 RPC 模式接入 Coda。",
+  "description": "把本机的 Pi coding agent 接进 Coda",
   "version": "1.5.1",
   "categories": [
     "Agent"
