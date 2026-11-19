@@ -164,7 +164,7 @@ test('setup cleans a stale committed backup before taking over the existing Pi',
 });
 
 test('a missing Pi installs the verified series into ~/.local/bin', () => {
-  const m = machine();
+  const m = machine({ updateResult: { version: VERIFIED_PI_VERSION, path: own, installed: true } });
   assert.equal(setup({ env: {}, home, ...m.options, find: () => m.updates.length ? own : 'pi' }), 0);
   assert.equal(m.updates.length, 1);
   assert.equal(m.updates[0].series, PI_SERIES);

@@ -118,6 +118,36 @@ export interface Settings extends Omit<SettingsInput, "queueMode" | "retry" | "s
   assert.deepEqual(c.unknown, []);
 });
 
+test('MCP extension config resolves aliased transport fields and both bases', t => {
+  const dir = fixture(t);
+  const transport = 'node_modules/@earendil-works/pi-mcp/dist/config.d.ts';
+  write(dir, 'dist/core/mcp-servers.d.ts', `
+import { type McpStdioServerConfig as TransportFields } from '@earendil-works/pi-mcp';
+interface McpServerConfigBase { exposure?: McpExposure; }
+type McpExposure = 'direct' | 'codemode';
+interface McpStdioServerConfig extends TransportFields, McpServerConfigBase {}
+type McpServerConfig = McpStdioServerConfig;
+`);
+  write(dir, transport, `
+interface McpServerConfigBase { timeout?: number; }
+interface McpStdioServerConfig extends McpServerConfigBase { command: string; args?: string[]; }
+type McpServerConfig = McpStdioServerConfig;
+`);
+  const config = {
+    scope: 'type', symbol: 'McpServerConfig', inputObject: true, sources: ['agent/coda-mcp.mjs'],
+    fields: { command: 'string', args: 'array', exposure: 'string' },
+  };
+  const contract = { ...minimal, contracts: [config] };
+  const compatible = { ...inspectPackage(dir, help), version: '1.0.0' };
+  assert.deepEqual(compare(contract, compatible, baseline(compatible)).incompatible, []);
+
+  write(dir, transport, readFileSync(join(dir, transport), 'utf8').replace('timeout?:', 'timeout:'));
+  const incompatible = { ...inspectPackage(dir, help), version: '1.0.0' };
+  assert.deepEqual(compare(contract, incompatible, baseline(compatible)).incompatible.map(item => item.message), [
+    '扩展配置 McpServerConfig 新增必填字段 timeout',
+  ]);
+});
+
 test('removed command, renamed nested field, changed scalar and new required input are incompatible', t => {
   const c = current(t), b = baseline(c);
   c.inventory.commands = []; assert.ok(compare(minimal,c,b).incompatible.some(r => r.message.includes('get_state')));

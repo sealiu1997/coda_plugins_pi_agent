@@ -102,14 +102,15 @@ function variants(type, db, seen = new Set()) {
   const union = splitTop(type, '|');
   if (union.length > 1) return union.flatMap(t => variants(t, db, seen));
   const intersection = splitTop(type, '&');
-  if (intersection.length > 1) return intersection.flatMap(t => variants(t, db, seen));
+  if (intersection.length > 1) return intersection.flatMap(t => splitTop(t, ',').flatMap(base => variants(base, db, seen)));
   if (type.startsWith('{')) return [members(type)];
   const indexed = type.match(/^([\w]+(?:<[^>]+>)?)\[([\s\S]+)\]$/);
   if (indexed) {
     const keys = indexed[2].match(/^["']/) ? [indexed[2].slice(1, -1)] : Object.keys(Object.assign({}, ...variants(indexed[1], db, seen)));
     return keys.flatMap(key => fieldTypes(variants(indexed[1], db, seen), [key], db).flatMap(t => variants(t, db, seen)));
   }
-  return db.has(type.replace(/<.*>$/, '')) ? variants(db.get(type.replace(/<.*>$/, '')).body, db, seen) : [];
+  const declaration = db.get(type.replace(/<.*>$/, ''));
+  return declaration ? variants(declaration.body, declaration.scope ?? db, seen) : [];
 }
 function discriminants(type, key, db) {
   const result = {};
@@ -201,10 +202,12 @@ function walk(dir) {
 }
 export function inspectPackage(packageDir, help) {
   const files = {};
+  const mcpConfig = 'dist/core/mcp-servers.d.ts';
   const primary = [
     'dist/modes/rpc/rpc-types.d.ts',
     'dist/core/agent-session.d.ts',
     'dist/core/extensions/types.d.ts',
+    mcpConfig,
     'dist/core/settings-manager.d.ts',
     'dist/core/settings-schema.d.ts',
   ];
@@ -212,6 +215,17 @@ export function inspectPackage(packageDir, help) {
     ...['pi-agent-core', 'pi-ai', 'pi-mcp'].flatMap(p => walk(join(installedDependency(packageDir, p), 'dist'))), ...walk(join(packageDir, 'dist'))];
   for (const file of candidates.filter(p => p.endsWith('.d.ts'))) if (existsSync(file)) files[relative(packageDir, file)] = read(file);
   const db = declarations(files);
+  // Pi's extension config and pi-mcp's transport config share names. Resolve the
+  // aliased base types in the transport package so each uses its own declarations.
+  const transportImport = files[mcpConfig]?.match(/import\s*\{([^{}]+)\}\s*from\s*["']@earendil-works\/pi-mcp["']/);
+  if (transportImport) {
+    const transportFile = relative(packageDir, join(installedDependency(packageDir, 'pi-mcp'), 'dist/config.d.ts'));
+    const transport = declarations({ [transportFile]: files[transportFile] ?? '' });
+    for (const [, name, alias] of transportImport[1].matchAll(/\b(\w+)\s+as\s+(\w+)\b/g)) {
+      const declaration = transport.get(name);
+      if (declaration) db.set(alias, { ...declaration, scope: transport });
+    }
+  }
   const rpc = discriminants('RpcCommand', 'type', db), responses = discriminants('RpcResponse', 'command', db);
   // AgentSessionEvent wraps core events in Exclude/WithParentToolCallId; unwrap explicitly.
   const session = db.get('AgentSessionEvent');
