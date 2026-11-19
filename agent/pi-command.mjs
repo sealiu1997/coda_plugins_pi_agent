@@ -35,7 +35,7 @@ export function readPiSeries({
 
 export const PI_SERIES = readPiSeries();
 export const MIN_PI_VERSION = `${PI_SERIES}.0`;
-export const VERIFIED_PI_VERSION = '1.5.0';
+export const VERIFIED_PI_VERSION = '1.5.2';
 
 export const parsePiVersion = output => {
   const match = String(output ?? '').match(/\bv?((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[\w.-]+)?(?:\+[\w.-]+)?)\b/);

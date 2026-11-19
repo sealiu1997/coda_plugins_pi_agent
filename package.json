@@ -3,7 +3,7 @@
   "id": "pi",
   "displayName": "Pi",
   "description": "把本机的 Pi coding agent 接进 Coda",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "categories": [
     "Agent"
   ],
@@ -129,7 +129,7 @@
   ],
   "devDependencies": {
     "@coda-console/plugin-check": "0.5.8",
-    "@earendil-works/pi-coding-agent": "1.5.0"
+    "@earendil-works/pi-coding-agent": "1.5.2"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",

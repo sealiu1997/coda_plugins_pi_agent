@@ -7,7 +7,7 @@ node scripts/check-pi-compat.mjs
 node scripts/check-pi-compat.mjs --json
 node scripts/check-pi-compat.mjs --pi /opt/homebrew/bin/pi
 node scripts/check-pi-compat.mjs --install latest
-node scripts/check-pi-compat.mjs --install 1.5.0 --json
+node scripts/check-pi-compat.mjs --install 1.5.2 --json
 # 人工确认报告后，才接受本机或指定候选版本：
 node scripts/check-pi-compat.mjs --accept
 ```
@@ -16,7 +16,7 @@ node scripts/check-pi-compat.mjs --accept
 
 `pi-surface.json` 是插件依赖的唯一清单，每个接口、字段、枚举都有 agent 源文件证据。`package.json` 中暴露给 Coda 的 settings.json/models.json 也记录在清单里；agent 本身不解析这些 Pi 配置文件，没有固定依赖的 Pi 设置键。Coda 的 `pi.*` 设置不算 Pi 的 Settings。修改插件接口时同步更新清单；测试核对显式 RPC 发送、CLI 字符串、扩展调用、事件分支和消费的 record 字段。
 
-`pi-snapshot.json` 保存版本、全量已发现的命令、事件、CLI 参数、扩展方法、设置键（含嵌套键）、扩展 UI 方法及声明签名。普通检查（包括缺少快照时）绝不写仓库；候选位于 JSON 报告的 `candidateSnapshot`。只有显式 `--accept` 才写入快照并标记人工确认。只有完整的 schemaVersion 1、`reviewed === true` 才可能返回 0；人读和 JSON 报告始终说明基线确认状态。1.5.0 快照在契约核对、fake live 和 pi-schema 声明解析补充后确认。运行时最低版本门槛是插件版本 `X.Y.Z` 的 `X.Y.0`（`X.Y` 是验证过的 Pi 系列，见 README「版本约定」），固定自动化验证版本为 1.5.0（即插件版本的 `X.Y` 系列），版本与运行时代码由测试交叉核对。插件版本号策略见 README「版本约定」：`X.Y` 是验证过的 Pi 系列，补丁号 `Z` 归插件自己。延伸：想用新于验证系列的 Pi，等插件跟进新系列；用户自己升级 Pi 时插件只提示「尚未验证」，不阻止。
+`pi-snapshot.json` 保存版本、全量已发现的命令、事件、CLI 参数、扩展方法、设置键（含嵌套键）、扩展 UI 方法及声明签名。普通检查（包括缺少快照时）绝不写仓库；候选位于 JSON 报告的 `candidateSnapshot`。只有显式 `--accept` 才写入快照并标记人工确认。只有完整的 schemaVersion 1、`reviewed === true` 才可能返回 0；人读和 JSON 报告始终说明基线确认状态。运行时最低版本门槛是插件版本 `X.Y.Z` 的 `X.Y.0`（`X.Y` 是验证过的 Pi 系列，见 README「版本约定」），固定自动化验证版本为 1.5.2（即插件版本的 `X.Y` 系列），版本与运行时代码由测试交叉核对。插件版本号策略见 README「版本约定」：`X.Y` 是验证过的 Pi 系列，补丁号 `Z` 归插件自己。延伸：想用新于验证系列的 Pi，等插件跟进新系列；用户自己升级 Pi 时插件只提示「尚未验证」，不阻止。
 
 来源按以下优先级读取，完全不导入执行 Pi 的 JS：
 
@@ -34,9 +34,16 @@ node scripts/check-pi-compat.mjs --accept
 
 实测仅运行固定的五个 getter，使用临时 cwd、HOME、PI_CODING_AGENT_DIR 和 session 目录；不继承 API Key，关闭扩展、MCP、资源发现、遥测与启动网络。空模型列表、未命名会话和空上下文合法，探测不会据此判断登录失败。未出现的可选字段依靠声明检查；报告中的“只读探测通过”不代表实际观察到全部可选字段。所有扫描器子进程各自拥有进程组，结束先 TERM，最多等待 500ms 后 KILL，并在有限时间内等待关闭。顶层 SIGINT/SIGTERM 会清理当前 git/npm/pi 进程组和临时目录；清理失败返回 3（无法检查），不会误报为不兼容。
 
-默认检查使用本机自动找到的 Pi，不联网。普通 CI 用 `npm run check:pi:verified` 扫描根 devDependency 锁定的 1.5.0；`--install 版本或latest` 使用临时 global prefix、HOME、配置与 npm cache 安装候选，结束后删除，不更新用户全局 Pi。最小环境移除凭据，`--ignore-scripts` 禁止包生命周期脚本。网络安装错误返回 3。二进制定位支持 npm 符号链接及字面量绝对 exec 路径的 shell 包装；其他包装器需要 `--pi` 指向实际入口。CHANGELOG 如存在则按版本标题摘录；版本缺失或降级时会提示边界限制。
+默认检查使用本机自动找到的 Pi，不联网。普通 CI 用 `npm run check:pi:verified` 扫描根 devDependency 锁定的 1.5.2；`--install 版本或latest` 使用临时 global prefix、HOME、配置与 npm cache 安装候选，结束后删除，不更新用户全局 Pi。最小环境移除凭据，`--ignore-scripts` 禁止包生命周期脚本。网络安装错误返回 3。二进制定位支持 npm 符号链接及字面量绝对 exec 路径的 shell 包装；其他包装器需要 `--pi` 指向实际入口。CHANGELOG 如存在则按版本标题摘录；版本缺失或降级时会提示边界限制。
 
 `--extension`、`-e`、`--extension=`、`-e=` 都记录在依赖面。插件把等号写法规范化后再传给 Pi；测试覆盖四种形式、所有 `.send()`、`.write()` 及变量形式的 UI 回包，并约束 Pi RPC 序列化只在中央模块内发生。CLI 签名解析失败、必需类型消失、未知响应、缺少 getter 响应均不能通过。
+
+## Pi 1.5.2 评估（基线 1.5.0 → 1.5.2）
+
+- Pi coding agent 的 `registerMcpServer` 使用它自己的 `McpServerConfig`，其中 `exposure` 来自 coding agent，连接字段继承自 `pi-mcp`。扫描器现按这份声明检查两类字段。用 Pi 1.5.2 的校验器确认 Coda 生成的配置仍保留 `exposure: direct`，其余服务器仍使用 Pi 默认值。
+- `registerMarkdownTransformer` 新增可选的 `options` 参数。插件没有注册 Markdown 转换器。
+- `ProviderConfigSchema` 为 `models.json` 新增可选兼容设置，插件调用的 `registerProvider` 及其所用字段通过契约检查。
+- Pi 1.5.2 通过隔离 RPC 与声明检查，并成为新的自动化验证基线。插件的最低支持版本仍为 Pi 1.5.0。
 
 ## Pi 1.5.0 评估（基线 1.4.0 → 1.5.0）
 

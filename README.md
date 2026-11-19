@@ -15,7 +15,7 @@
 - 插件只在缺失或低于验证系列时处理 Pi：缺失或插件管理的安装装验证系列的最新补丁，npm 安装在原 prefix 原地升级，Homebrew、Bun、pnpm 按各自工具给出的版本，无法识别来源的自定义安装升不了，会报错并提示用原来的安装工具升级。没有「跟随最新版」开关（1.5.0 曾有，1.5.1 起移除）：想用新于验证系列的 Pi，等插件跟进新系列；你自己升级 Pi 时插件只提示「尚未验证」，不阻止。
 - 自定义脚本、独立下载等无法识别来源的安装，以及显式 `pi.commandPath` 指向的 Pi，会被接管和验证，但插件不会改动它们：显式路径是你自己的选择，低于最低版本时 setup 只会失败并给出指引。要让插件自动升级，请把 `pi.commandPath` 留为 `pi`，让它发现并接管 npm、Homebrew、Bun 或 pnpm 的安装。
 - 还要在 Coda 里添加 provider（见下），或在 pi 里完成登录。
-- Node 由 Coda 提供（`$CODA_NODE`）。Pi 是独立的本机安装；Pi 1.5.0 和 Coda 官方检查器只作为开发、CI 与兼容扫描的 devDependency。
+- Node 由 Coda 提供（`$CODA_NODE`）。Pi 是独立的本机安装；Pi 1.5.2 和 Coda 官方检查器只作为开发、CI 与兼容扫描的 devDependency。
 - 直接使用本机 Pi 的配置、登录、扩展与会话目录（`$PI_CODING_AGENT_DIR`，默认 `~/.pi/agent`），插件不复制也不改写它们；Coda 里开的会话也能在 `pi --resume` 里看到。
 
 ## 安装
@@ -83,14 +83,14 @@ Node ≥24。先 `npm ci --ignore-scripts`，再运行：
 | `npm run check:coda` | 官方 checker 0.5.8 清单检查与 fake Pi 握手 |
 | `npm run check:fake-live` | 官方 `coda-plugin-check --live` 驱动真实插件入口，覆盖系统指令、回合、取消、插话、恢复与关闭 |
 | `npm run check:pi` | 扫描本机自动找到的 Pi，核对 CLI/RPC/事件/扩展 API、能力新增与 changelog |
-| `npm run check:pi:verified` | 扫描 devDependency 中锁定的 Pi 1.5.0；普通 CI 使用这一项 |
+| `npm run check:pi:verified` | 扫描 devDependency 中锁定的 Pi 1.5.2；普通 CI 使用这一项 |
 | `npm run probe:upstream` | 手动运行独立的 latest 探测，报告写入 `compat-reports/` |
 | `npm run check:real-live` | **人工选择运行**：对本机真实 Pi 执行官方 live 检查，可能需要登录并消耗模型额度 |
 
 Coda 通用协议只复用官方 `@coda-console/plugin-check`，精确版本 **0.5.8** 与传递依赖写在 `package-lock.json`。不再维护另一套 Coda 协议扫描或协议基线。
 `check:coda` 的握手和 fake live 在临时插件副本中运行原始 `agent/` 文件，只把清单默认 `pi.commandPath` 指向 fake 可执行文件；不改你的设置或 Pi 配置。fake 也模拟 `--version`、`--help`、系统提示词文件与标题进程，且断言取消和轮中插话实际发生，跳过场景不能当作通过。
 
-普通 PR / main CI 只跑 lockfile 中的官方 checker 和开发用的 Pi 1.5.0。每日的 `Upstream compatibility advisory` workflow（也可手动发起）单独探测两个上游的 latest；上游变化或检查失败使这个独立任务告警，不进入普通 PR 的稳定检查。任务只给 `contents: read`，不使用 secrets，也不发布。
+普通 PR / main CI 只跑 lockfile 中的官方 checker 和开发用的 Pi 1.5.2。每日的 `Upstream compatibility advisory` workflow（也可手动发起）单独探测两个上游的 latest；上游变化或检查失败使这个独立任务告警，不进入普通 PR 的稳定检查。任务只给 `contents: read`，不使用 secrets，也不发布。
 它在 job summary 和 artifact 中保存版本与提交、官方 checker 结果、Pi JSON 报告，以及从固定 checker 发布提交到最新发布提交、上游 main 的 `docs/agent-protocol.md` diff 与相关提交列表。artifact 默认保留 30 天；新协议需人工判断插件是否需要接入，再提交固定版本和快照更新。
 
 Pi 扫描器用法与退出码见 [compat/NOTES.md](compat/NOTES.md)。无 `--accept` 时始终只读仓库基线；候选快照在 JSON 报告里。接受前检查完整报告与 changelog：
@@ -144,6 +144,8 @@ Coda 官方 Claude SDK 和 Codex 插件把各自的 SDK/CLI 锁在插件依赖�
 所以发新版就是在 PR 里把 `package.json` 与 `package-lock.json` 的版本加一，合并后由这个 workflow 发布。插件自己的修复只加补丁号（`1.5.0` → `1.5.1`）；验证了新的 Pi 系列（如 1.6）时，把 `X.Y` 对齐过去、补丁号归零（`1.6.0`），同时把 devDependency 的 Pi 钉到该系列并更新 `compat/pi-snapshot.json`。
 
 ## Pi 1.5 的适配结论
+
+插件 1.5.2 验证了 Pi 1.5.2 的 RPC 与 MCP 配置，Coda 内置 MCP 工具可以继续直接提供给模型。最低支持版本为 Pi 1.5.0。详见 [Pi 1.5.2 评估](compat/NOTES.md#pi-152-评估基线-150--152)。
 
 对 1.5.0 的扫描没有确定不兼容项，因此插件版本对齐到 1.5.0。与 RPC 集成相关的几项：
 
